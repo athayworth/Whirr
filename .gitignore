@@ -1,0 +1,8 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcodeproj/
+Package.resolved
+build/
+dist/
+Whirr.app/
