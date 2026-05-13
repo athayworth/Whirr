@@ -1,9 +1,18 @@
 import Foundation
 import Darwin
 
-/// Samples per-process CPU/memory using libproc (the same APIs `top` and Activity Monitor use).
-/// CPU% is computed by diffing cumulative CPU time across two samples, so the first call
-/// after construction returns an empty list — call again after a short interval for usable data.
+/// Samples per-process CPU/memory using libproc.
+/// CPU% is computed by diffing cumulative CPU time across two samples, so the first
+/// call after construction returns an empty list — call again after a short interval
+/// for usable data.
+///
+/// **Apple Silicon timebase note:** `proc_pid_rusage`'s `ri_user_time` /
+/// `ri_system_time` are documented as nanoseconds, but on M-series Macs the kernel
+/// actually stores them in raw `mach_absolute_time` ticks (the conversion path
+/// inside the kernel divides ticks by 1000 expecting nanoseconds, but the ticks
+/// are on a ~24 MHz timebase, so reported values are ~41× too low). We correct
+/// using `mach_timebase_info` to recover real nanoseconds. On Intel Macs the
+/// ratio is 1/1, so the correction is a no-op.
 public final class ProcessSampler {
     public init() {}
 
@@ -15,6 +24,11 @@ public final class ProcessSampler {
 
     private var previous: [Int32: Timing] = [:]
     private var previousSampleTime: TimeInterval = 0
+    private let timebase: (numer: UInt32, denom: UInt32) = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        return (info.numer, info.denom)
+    }()
 
     /// Returns process samples sorted by CPU% descending.
     public func sample() -> [ProcessSample] {
@@ -100,8 +114,10 @@ public final class ProcessSampler {
         }
         guard rc == 0 else { return nil }
 
+        let rawCPUTicks = info.ri_user_time &+ info.ri_system_time
+        let cpuNanoseconds = rawCPUTicks &* UInt64(timebase.numer) / UInt64(timebase.denom)
         return Timing(
-            totalCPUNanoseconds: info.ri_user_time &+ info.ri_system_time,
+            totalCPUNanoseconds: cpuNanoseconds,
             residentBytes: info.ri_resident_size,
             name: processName(pid: pid)
         )

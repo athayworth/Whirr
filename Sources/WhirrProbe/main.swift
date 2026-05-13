@@ -47,9 +47,15 @@ func diagnoseCPUAPIs(forPID pid: Int32) {
     let rusageDelta = (r2.ri_user_time &- r1.ri_user_time) &+ (r2.ri_system_time &- r1.ri_system_time)
     let pidinfoDelta = (t2.pti_total_user &- t1.pti_total_user) &+ (t2.pti_total_system &- t1.pti_total_system)
 
+    // Apply mach timebase conversion — the kernel reports CPU times in raw ticks
+    // on Apple Silicon, not nanoseconds as documented.
+    var tb = mach_timebase_info_data_t()
+    mach_timebase_info(&tb)
+    let scale = Double(tb.numer) / Double(tb.denom)
     print(String(format: "  wall elapsed:    %.3fs", w2 - w1))
-    print(String(format: "  proc_pid_rusage: Δ user+system = %d ns → %.2f%% per core", rusageDelta, Double(rusageDelta) / elapsedNs * 100))
-    print(String(format: "  proc_pidinfo:    Δ total user+system = %d ns → %.2f%% per core", pidinfoDelta, Double(pidinfoDelta) / elapsedNs * 100))
+    print(String(format: "  mach timebase:   %u/%u (ratio %.2f)", tb.numer, tb.denom, scale))
+    print(String(format: "  proc_pid_rusage: Δ raw = %d → %.2f%% per core (corrected for timebase)", rusageDelta, Double(rusageDelta) * scale / elapsedNs * 100))
+    print(String(format: "  proc_pidinfo:    Δ raw = %d → %.2f%% per core (corrected for timebase)", pidinfoDelta, Double(pidinfoDelta) * scale / elapsedNs * 100))
 }
 
 print("Whirr Probe")
