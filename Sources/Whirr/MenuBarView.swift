@@ -67,19 +67,62 @@ struct MenuBarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 ForEach(monitor.topProcesses) { proc in
-                    HStack {
+                    HStack(spacing: 8) {
                         Text(proc.name)
                             .font(.callout)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
+                        if proc.diskIOBytesPerSec >= ioBadgeThreshold {
+                            Text(Self.formatRate(proc.diskIOBytesPerSec))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary)
+                        }
                         Text(String(format: "%.1f%%", proc.cpuPercent))
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                 }
             }
+
+            if !topIOProcesses.isEmpty {
+                Text("Top by disk I/O")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 6)
+                ForEach(topIOProcesses) { proc in
+                    HStack(spacing: 8) {
+                        Text(proc.name)
+                            .font(.callout)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text(Self.formatRate(proc.diskIOBytesPerSec))
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
+    }
+
+    // Show an I/O badge on the CPU list when a process is moving at least
+    // 1 MB/s — small enough to surface real activity, big enough to suppress
+    // background noise from every idle process.
+    private var ioBadgeThreshold: UInt64 { 1_048_576 }
+
+    // Only show the dedicated I/O section when at least one process is
+    // really moving bytes; otherwise it's just clutter.
+    private var topIOProcesses: [ProcessSample] {
+        let busy = monitor.topProcesses.sorted { $0.diskIOBytesPerSec > $1.diskIOBytesPerSec }
+        guard let leader = busy.first, leader.diskIOBytesPerSec >= 5 * ioBadgeThreshold else { return [] }
+        return Array(busy.prefix(3).filter { $0.diskIOBytesPerSec >= ioBadgeThreshold })
+    }
+
+    private static func formatRate(_ bytesPerSec: UInt64) -> String {
+        let mb = Double(bytesPerSec) / 1_048_576
+        if mb >= 10 { return String(format: "%.0f MB/s", mb) }
+        return String(format: "%.1f MB/s", mb)
     }
 
     private var footer: some View {
