@@ -29,6 +29,7 @@ To launch at login: System Settings → General → Login Items → add Whirr.
 
 ```sh
 swift build                 # compile both targets
+swift test                  # unit tests for the rules engine
 swift run whirr-probe       # CLI probe — verifies samplers + rules, prints a snapshot
 swift run Whirr             # run the menu bar app from terminal (logs to stdout)
 ```
@@ -48,6 +49,8 @@ Sources/
     MenuBarView.swift       # Dropdown UI
     Resources/Info.plist    # LSUIElement=true (no dock icon)
   WhirrProbe/               # CLI test runner that prints a single diagnosis
+Tests/
+  WhirrCoreTests/           # XCTest unit tests for the rules engine
 ```
 
 Sampling runs every 3 seconds on a background actor; UI updates on `@MainActor`. Per-process CPU% is computed by diffing cumulative CPU times across two samples (same approach as `top`).
@@ -58,10 +61,11 @@ Sampling runs every 3 seconds on a background actor; UI updates on `@MainActor`.
 - **SwapThrashingRule** — fires when ≥ 2 GB swap is in use; critical at 6 GB
 - **ThermalThrottleRule** — surfaces `ProcessInfo.ThermalState ≥ .serious`
 - **OverloadedSystemRule** — load average / core count ≥ 1.5
-- **BackupHoggingRule** — Backblaze (`bzserv`, `bztransmit`), Time Machine (`backupd`), `rsync`, `restic`, `borg` using ≥ 5% CPU
+- **BackupHoggingRule** — Backblaze (`bzserv`, `bztransmit`), Time Machine (`backupd`), `rsync`, `restic`, `borg` — fires on either ≥ 5 % CPU or ≥ 5 MB/s sustained disk I/O (backups are usually I/O-bound, not CPU-bound)
+- **HighDiskIORule** — any single non-backup process reading or writing ≥ 50 MB/s sustained; critical at 200 MB/s
 - **RunawayProcessRule** — any single process ≥ 80% CPU
 
-Adding a new rule = new `struct` conforming to `Rule` + one line in `RulesEngine.allRules`.
+Adding a new rule = new `struct` conforming to `Rule` + one line in `RulesEngine.allRules`. Rules are pure functions of their inputs — see `Tests/WhirrCoreTests/RulesEngineTests.swift` for the testing pattern.
 
 ## License
 
