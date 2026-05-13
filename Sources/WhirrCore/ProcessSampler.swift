@@ -77,16 +77,32 @@ public final class ProcessSampler {
     }
 
     private func timing(forPID pid: Int32) -> Timing? {
-        var info = proc_taskinfo()
-        let size = Int32(MemoryLayout<proc_taskinfo>.size)
-        let bytesWritten = withUnsafeMutablePointer(to: &info) { ptr -> Int32 in
-            proc_pidinfo(pid, PROC_PIDTASKINFO, 0, ptr, size)
+        // proc_pid_rusage(RUSAGE_INFO_V4) is what `top` and Activity Monitor use.
+        // ri_user_time + ri_system_time give cumulative CPU time across both
+        // live and terminated threads, in nanoseconds — *unlike* proc_pidinfo's
+        // pti_total_user, which on modern macOS appears not to fully account
+        // for live thread time and reads ~40× low for long-running processes.
+        //
+        // The Swift import for `proc_pid_rusage`'s buffer parameter is awkward:
+        // `rusage_info_t` is `typedef void * rusage_info_t`, so the buffer arg
+        // imports as `UnsafeMutablePointer<rusage_info_t?>` (pointer to optional
+        // raw pointer). The kernel ignores the C type entirely and writes the
+        // struct through the address it's given, so we rebind our struct
+        // pointer to that type to satisfy the compiler.
+        var info = rusage_info_v4()
+        let rc = withUnsafeMutablePointer(to: &info) { infoPtr -> Int32 in
+            UnsafeMutableRawPointer(infoPtr).withMemoryRebound(
+                to: rusage_info_t?.self,
+                capacity: 1
+            ) { typedPtr in
+                proc_pid_rusage(pid, RUSAGE_INFO_V4, typedPtr)
+            }
         }
-        guard bytesWritten == size else { return nil }
+        guard rc == 0 else { return nil }
 
         return Timing(
-            totalCPUNanoseconds: info.pti_total_user &+ info.pti_total_system,
-            residentBytes: info.pti_resident_size,
+            totalCPUNanoseconds: info.ri_user_time &+ info.ri_system_time,
+            residentBytes: info.ri_resident_size,
             name: processName(pid: pid)
         )
     }
