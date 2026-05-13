@@ -23,9 +23,9 @@ final class SystemMonitor {
 
     var statusIcon: String {
         switch worstSeverity {
-        case .critical: return "exclamationmark.triangle.fill"
-        case .warning:  return "gauge.with.dots.needle.67percent"
-        case .ok:       return "gauge.with.dots.needle.33percent"
+        case .critical: return "fanblades.fill"
+        case .warning:  return "fanblades"
+        case .ok:       return "fanblades"
         }
     }
 
