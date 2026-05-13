@@ -27,8 +27,13 @@ public struct RulesEngine: Sendable {
         ThermalThrottleRule(),
         OverloadedSystemRule(),
         BackupHoggingRule(),
+        HighDiskIORule(),
         RunawayProcessRule()
     ]
+}
+
+private func formatMBps(_ bytesPerSec: UInt64) -> String {
+    String(format: "%.0f MB/s", Double(bytesPerSec) / 1_048_576)
 }
 
 struct CoreContext {
@@ -135,16 +140,74 @@ struct BackupHoggingRule: Rule {
         "borg"
     ]
 
+    // Backup processes are I/O-bound, so a sustained read rate matters more
+    // than CPU%. 5 MB/s is well above idle housekeeping but well below an
+    // active scan/upload.
+    private static let activeIOThreshold: UInt64 = 5 * 1_048_576
+    private static let activeCPUThreshold: Double = 5.0
+
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
-        let active = ctx.processes(named: Self.backupProcessNames).filter { $0.cpuPercent >= 5.0 }
+        let active = ctx.processes(named: Self.backupProcessNames).filter {
+            $0.cpuPercent >= Self.activeCPUThreshold || $0.diskIOBytesPerSec >= Self.activeIOThreshold
+        }
         guard !active.isEmpty else { return nil }
+
         let totalCPU = active.reduce(0.0) { $0 + $1.cpuPercent }
+        let totalIO = active.reduce(UInt64(0)) { $0 &+ $1.diskIOBytesPerSec }
         let names = active.map(\.name).sorted().joined(separator: ", ")
+
+        let detail: String
+        if totalIO >= Self.activeIOThreshold {
+            detail = String(
+                format: "%@ is reading/writing %@ (%.0f%% CPU). Pause it temporarily to free up disk and memory.",
+                names, formatMBps(totalIO), totalCPU
+            )
+        } else {
+            detail = String(
+                format: "%@ is using %.0f%% CPU. Pause it temporarily to free up resources.",
+                names, totalCPU
+            )
+        }
+
+        let severity: Severity = (totalIO >= 30 * 1_048_576 || totalCPU >= 30) ? .warning : .ok
         return Diagnosis(
             title: "Backup is using your system",
-            detail: String(format: "%@ is using %.0f%% CPU. Pause it temporarily to free up resources.", names, totalCPU),
-            severity: totalCPU >= 30 ? .warning : .ok,
+            detail: detail,
+            severity: severity,
             culprits: active.map(\.name)
+        )
+    }
+}
+
+struct HighDiskIORule: Rule {
+    // 50 MB/s sustained from a single process is enough to noticeably
+    // contend with foreground work on an internal SSD; 200 MB/s pegs it.
+    private static let warningThreshold: UInt64 = 50 * 1_048_576
+    private static let criticalThreshold: UInt64 = 200 * 1_048_576
+
+    // Backup processes are handled by BackupHoggingRule — don't double-fire.
+    private static let excluded: Set<String> = [
+        "bzserv", "bztransmit", "bzfilelist", "bzbmenu",
+        "backupd", "backupd-helper",
+        "rsync", "restic", "borg"
+    ]
+
+    func evaluate(_ ctx: CoreContext) -> Diagnosis? {
+        let heavy = ctx.processes
+            .filter { !Self.excluded.contains($0.name) && $0.diskIOBytesPerSec >= Self.warningThreshold }
+            .sorted { $0.diskIOBytesPerSec > $1.diskIOBytesPerSec }
+        guard let worst = heavy.first else { return nil }
+
+        let readsMostly = worst.diskReadBytesPerSec >= worst.diskWriteBytesPerSec
+        let verb = readsMostly ? "reading" : "writing"
+        return Diagnosis(
+            title: "Disk is busy",
+            detail: String(
+                format: "%@ is %@ %@ from disk. Heavy I/O can make the whole system feel sluggish.",
+                worst.name, verb, formatMBps(worst.diskIOBytesPerSec)
+            ),
+            severity: worst.diskIOBytesPerSec >= Self.criticalThreshold ? .critical : .warning,
+            culprits: heavy.prefix(3).map(\.name)
         )
     }
 }

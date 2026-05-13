@@ -82,11 +82,28 @@ _ = processSampler.sample()
 Thread.sleep(forTimeInterval: 2.0)
 let processes = processSampler.sample()
 print("  Total processes observed: \(processes.count)")
+
+func formatRate(_ bytesPerSec: UInt64) -> String {
+    let mb = Double(bytesPerSec) / 1_048_576
+    return String(format: "%6.1f MB/s", mb)
+}
+
 print("  Top 8 by CPU%:")
 for proc in processes.prefix(8) {
     let cpuStr = String(format: "%6.1f%%", proc.cpuPercent)
-    let memStr = formatBytes(proc.memoryBytes)
-    print("    \(cpuStr)  \(memStr.padding(toLength: 9, withPad: " ", startingAt: 0))  pid=\(proc.pid)  \(proc.name)")
+    let memStr = formatBytes(proc.memoryBytes).padding(toLength: 9, withPad: " ", startingAt: 0)
+    let ioStr = formatRate(proc.diskIOBytesPerSec)
+    print("    \(cpuStr)  \(memStr)  io=\(ioStr)  pid=\(proc.pid)  \(proc.name)")
+}
+
+let topByIO = processes.sorted { $0.diskIOBytesPerSec > $1.diskIOBytesPerSec }
+if let busiest = topByIO.first, busiest.diskIOBytesPerSec > 0 {
+    print("  Top 5 by disk I/O:")
+    for proc in topByIO.prefix(5) where proc.diskIOBytesPerSec > 0 {
+        let readStr = formatRate(proc.diskReadBytesPerSec)
+        let writeStr = formatRate(proc.diskWriteBytesPerSec)
+        print("    r=\(readStr)  w=\(writeStr)  pid=\(proc.pid)  \(proc.name)")
+    }
 }
 
 let diagnoses = RulesEngine().evaluate(snapshot: snapshot, processes: processes)

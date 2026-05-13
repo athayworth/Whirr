@@ -29,12 +29,27 @@ public struct ProcessSample: Identifiable, Hashable, Sendable {
     public let name: String
     public let cpuPercent: Double
     public let memoryBytes: UInt64
+    public let diskReadBytesPerSec: UInt64
+    public let diskWriteBytesPerSec: UInt64
 
-    public init(pid: Int32, name: String, cpuPercent: Double, memoryBytes: UInt64) {
+    public init(
+        pid: Int32,
+        name: String,
+        cpuPercent: Double,
+        memoryBytes: UInt64,
+        diskReadBytesPerSec: UInt64 = 0,
+        diskWriteBytesPerSec: UInt64 = 0
+    ) {
         self.pid = pid
         self.name = name
         self.cpuPercent = cpuPercent
         self.memoryBytes = memoryBytes
+        self.diskReadBytesPerSec = diskReadBytesPerSec
+        self.diskWriteBytesPerSec = diskWriteBytesPerSec
+    }
+
+    public var diskIOBytesPerSec: UInt64 {
+        diskReadBytesPerSec &+ diskWriteBytesPerSec
     }
 }
 

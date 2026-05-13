@@ -19,6 +19,8 @@ public final class ProcessSampler {
     private struct Timing {
         let totalCPUNanoseconds: UInt64
         let residentBytes: UInt64
+        let diskBytesRead: UInt64
+        let diskBytesWritten: UInt64
         let name: String
     }
 
@@ -42,19 +44,35 @@ public final class ProcessSampler {
             let elapsedNs = elapsedSeconds * 1_000_000_000
             for (pid, timing) in current {
                 let cpuPercent: Double
+                let diskReadPerSec: UInt64
+                let diskWritePerSec: UInt64
                 if let prior = previous[pid] {
                     let delta = timing.totalCPUNanoseconds >= prior.totalCPUNanoseconds
                         ? timing.totalCPUNanoseconds - prior.totalCPUNanoseconds
                         : 0
                     cpuPercent = (Double(delta) / elapsedNs) * 100.0
+                    diskReadPerSec = perSecond(
+                        current: timing.diskBytesRead,
+                        prior: prior.diskBytesRead,
+                        elapsedSeconds: elapsedSeconds
+                    )
+                    diskWritePerSec = perSecond(
+                        current: timing.diskBytesWritten,
+                        prior: prior.diskBytesWritten,
+                        elapsedSeconds: elapsedSeconds
+                    )
                 } else {
                     cpuPercent = 0
+                    diskReadPerSec = 0
+                    diskWritePerSec = 0
                 }
                 samples.append(ProcessSample(
                     pid: pid,
                     name: timing.name,
                     cpuPercent: cpuPercent,
-                    memoryBytes: timing.residentBytes
+                    memoryBytes: timing.residentBytes,
+                    diskReadBytesPerSec: diskReadPerSec,
+                    diskWriteBytesPerSec: diskWritePerSec
                 ))
             }
         }
@@ -119,8 +137,16 @@ public final class ProcessSampler {
         return Timing(
             totalCPUNanoseconds: cpuNanoseconds,
             residentBytes: info.ri_resident_size,
+            diskBytesRead: info.ri_diskio_bytesread,
+            diskBytesWritten: info.ri_diskio_byteswritten,
             name: processName(pid: pid)
         )
+    }
+
+    private func perSecond(current: UInt64, prior: UInt64, elapsedSeconds: TimeInterval) -> UInt64 {
+        guard current >= prior, elapsedSeconds > 0 else { return 0 }
+        let delta = current - prior
+        return UInt64(Double(delta) / elapsedSeconds)
     }
 
     private func processName(pid: Int32) -> String {
