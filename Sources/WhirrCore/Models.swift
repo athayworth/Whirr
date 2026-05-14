@@ -44,6 +44,10 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
     public let pid: Int32
     public let name: String
     public let cpuPercent: Double
+    /// "Real memory" footprint — what Activity Monitor's "Memory" column
+    /// shows. Resident pages plus pages held in the page compressor.
+    /// This is a better proxy for memory responsibility than bare resident
+    /// size, which under-counts on a compressed/swapped system.
     public let memoryBytes: UInt64
     public let diskReadBytesPerSec: UInt64
     public let diskWriteBytesPerSec: UInt64

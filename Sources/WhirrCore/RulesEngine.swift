@@ -53,6 +53,13 @@ private func formatMBps(_ bytesPerSec: UInt64) -> String {
     String(format: "%.0f MB/s", Double(bytesPerSec) / 1_048_576)
 }
 
+private func formatBytes(_ bytes: UInt64) -> String {
+    let gb = Double(bytes) / 1_073_741_824
+    if gb >= 1.0 { return String(format: "%.1f GB", gb) }
+    let mb = Double(bytes) / 1_048_576
+    return String(format: "%.0f MB", mb)
+}
+
 struct CoreContext {
     let snapshot: SystemSnapshot
     let processes: [ProcessSample]
@@ -391,11 +398,10 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
             .sorted { $0.memoryBytes > $1.memoryBytes }
             .first
         let suggestion: String
-        if let hog = topMemoryHog, hog.memoryBytes >= 1_073_741_824 {
-            let gb = Double(hog.memoryBytes) / 1_073_741_824
+        if let hog = topMemoryHog, hog.memoryBytes > 0 {
             suggestion = String(
-                format: "Top memory user is %@ at %.1f GB resident — closing it (or its tabs/files) is the fastest win.",
-                hog.name, gb
+                format: "Top memory user is %@ at %@ — closing it (or its tabs/files) is the fastest win.",
+                hog.name, formatBytes(hog.memoryBytes)
             )
         } else {
             suggestion = "Quitting unused apps is the only real fix — adding more swap just makes the disk read more."

@@ -186,9 +186,14 @@ public final class ProcessSampler {
 
         let rawCPUTicks = info.ri_user_time &+ info.ri_system_time
         let cpuNanoseconds = rawCPUTicks &* UInt64(timebase.numer) / UInt64(timebase.denom)
+        // `ri_phys_footprint` is what Activity Monitor's "Memory" column shows:
+        // resident pages plus pages held in the page compressor. It's a much
+        // better proxy for "how much memory is this process responsible for"
+        // than `ri_resident_size`, which excludes compressed pages and so
+        // collapses to small values exactly when memory pressure is high.
         return Timing(
             totalCPUNanoseconds: cpuNanoseconds,
-            residentBytes: info.ri_resident_size,
+            residentBytes: info.ri_phys_footprint,
             diskBytesRead: info.ri_diskio_bytesread,
             diskBytesWritten: info.ri_diskio_byteswritten,
             name: processName(pid: pid)
