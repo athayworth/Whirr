@@ -43,7 +43,9 @@ public struct RulesEngine: Sendable {
 
     private static let allNarratives: [any NarrativeRule] = [
         BackupChokingForegroundNarrative(),
-        MemorySwapSpiralNarrative()
+        MemorySwapSpiralNarrative(),
+        ThermalThrottleAmplifierNarrative(),
+        DiskMemoryContentionNarrative()
     ]
 }
 
@@ -254,9 +256,9 @@ struct RunawayProcessRule: Rule {
 
 // MARK: - Narratives
 
-/// The OG Whirr scenario: a backup is hammering disk while memory is tight,
-/// so reads land on the same SSD bandwidth that backups are eating, and
-/// macOS can't compress fast enough to keep foreground apps responsive.
+/// The OG Whirr scenario: a backup is hammering disk while at least one
+/// other subsystem is degraded. Backup reads compete with everything else
+/// on the same SSD bandwidth, so the combination is worse than its parts.
 struct BackupChokingForegroundNarrative: NarrativeRule {
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         guard let backup = diagnoses.first(withTitle: "Backup is using your system") else { return nil }
@@ -274,16 +276,72 @@ struct BackupChokingForegroundNarrative: NarrativeRule {
         var pieces: [String] = []
         if memoryTight != nil { pieces.append("memory is tight") }
         if swapping != nil { pieces.append("the system is swapping") }
-        if thermal != nil { pieces.append("the CPU is throttling") }
-        let combinedSignals = listSentence(pieces)
+        if thermal != nil { pieces.append("the CPU is throttling from heat") }
+        let situation = joinNaturally(pieces)
 
         let severity = secondarySignals.map(\.severity).max() ?? backup.severity
         return Diagnosis(
             title: "Foreground apps will feel frozen",
-            detail: "\(names) is eating disk and memory at the same time \(combinedSignals). "
-                + "Pause the backup — that frees disk bandwidth and lets the page compressor catch up.",
+            detail: "\(names) is hammering the disk while \(situation). "
+                + "Backup reads compete with everything else on the SSD — pausing it is the fastest fix.",
             severity: severity,
             culprits: backup.culprits,
+            kind: .narrative
+        )
+    }
+}
+
+/// Thermal throttle + a CPU-pegged process: the throttle is the bottleneck,
+/// not the workload. Killing the runaway process won't bring back the lost
+/// performance until the CPU cools off.
+struct ThermalThrottleAmplifierNarrative: NarrativeRule {
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        let thermal = diagnoses.first(withTitle: "CPU is throttling from heat")
+            ?? diagnoses.first(withTitle: "CPU is critically hot")
+        guard let thermal else { return nil }
+        let runaway = diagnoses.first { $0.title.hasSuffix("is using a lot of CPU") }
+        guard let runaway else { return nil }
+
+        let culprit = runaway.culprits.first ?? "the top process"
+        return Diagnosis(
+            title: "Cooling matters more than killing right now",
+            detail: "\(culprit) is pegging the CPU and the CPU is already throttling from heat — "
+                + "the throttle is the bottleneck, not the workload. "
+                + "Improving airflow (or pausing nearby heavy work) will recover more performance than force-quitting.",
+            severity: thermal.severity,
+            culprits: runaway.culprits,
+            kind: .narrative
+        )
+    }
+}
+
+/// Heavy disk I/O combined with memory pressure: the system needs to page
+/// from disk, but a busy process is eating the same SSD bandwidth that
+/// macOS uses to read pages back in. Either side alone is annoying; together
+/// they cause sustained stutter.
+struct DiskMemoryContentionNarrative: NarrativeRule {
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        // Don't compete with more specific narratives: skip when Backup is
+        // active, or when the underlying memory+swap condition that drives
+        // MemorySwapSpiralNarrative is present.
+        if diagnoses.first(withTitle: "Backup is using your system") != nil { return nil }
+        let memorySaturatedAndSwapping =
+            diagnoses.first(withTitle: "Memory is saturated") != nil
+            && diagnoses.first(withTitle: "System is swapping heavily") != nil
+        if memorySaturatedAndSwapping { return nil }
+
+        guard let disk = diagnoses.first(withTitle: "Disk is busy") else { return nil }
+        let memoryTight = diagnoses.first(withTitle: "Memory is tight")
+            ?? diagnoses.first(withTitle: "Memory is saturated")
+        guard let memoryTight else { return nil }
+
+        let culprit = disk.culprits.first ?? "a process"
+        return Diagnosis(
+            title: "Disk and memory are fighting for the same SSD",
+            detail: "\(culprit) is doing heavy disk I/O while memory pressure forces macOS to page from the same drive. "
+                + "Closing \(culprit) or freeing RAM (either one) breaks the contention.",
+            severity: max(disk.severity, memoryTight.severity),
+            culprits: disk.culprits,
             kind: .narrative
         )
     }
@@ -325,13 +383,13 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
     }
 }
 
-private func listSentence(_ pieces: [String]) -> String {
+private func joinNaturally(_ pieces: [String]) -> String {
     switch pieces.count {
     case 0: return ""
-    case 1: return "and \(pieces[0])"
-    case 2: return "and \(pieces[0]) and \(pieces[1])"
+    case 1: return pieces[0]
+    case 2: return "\(pieces[0]) and \(pieces[1])"
     default:
         let head = pieces.dropLast().joined(separator: ", ")
-        return "and \(head), and \(pieces.last!)"
+        return "\(head), and \(pieces.last!)"
     }
 }

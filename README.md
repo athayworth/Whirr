@@ -71,8 +71,12 @@ Adding a new rule = new `struct` conforming to `Rule` + one line in `RulesEngine
 
 After the rules above fire, a second pass runs **narrative rules** that see the produced diagnoses and synthesize a multi-signal explanation. These render as a highlighted card at the top of the menu — the "why your Mac is slow" story rather than a list of facts.
 
-- **BackupChokingForegroundNarrative** — backup hogging + memory tight / swap / thermal throttle → "Foreground apps will feel frozen. Pause the backup."
-- **MemorySwapSpiralNarrative** — memory saturated + heavy swap (and no backup running) → names your top memory hog as the fastest win.
+- **BackupChokingForegroundNarrative** — backup hogging + any of (memory tight / swap / thermal) → "Foreground apps will feel frozen. Pause the backup."
+- **MemorySwapSpiralNarrative** — memory saturated + heavy swap (no backup) → names your top memory hog as the fastest win.
+- **ThermalThrottleAmplifierNarrative** — thermal throttle + a CPU-pegged process → "Cooling matters more than killing right now."
+- **DiskMemoryContentionNarrative** — heavy disk I/O + memory pressure (no backup or memory-swap spiral) → "Disk and memory are fighting for the same SSD."
+
+Precedence is hand-wired: more specific narratives suppress less specific ones via the conditions they check, not by inspecting each other's titles. Add a precedence test alongside any new narrative.
 
 ## License
 

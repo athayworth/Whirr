@@ -303,6 +303,85 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertEqual(narratives.count, 1)
         XCTAssertEqual(narratives.first?.title, "Foreground apps will feel frozen")
     }
+
+    func testBackupNarrativeDescribesActualSecondarySignal() {
+        // Backup + thermal-only (no memory pressure). Detail must NOT claim
+        // memory is involved when it isn't.
+        let result = engine.evaluate(
+            snapshot: snapshot(thermal: .serious),
+            processes: [process(name: "bztransmit", cpu: 8)]
+        )
+        let narrative = result.first { $0.kind == .narrative }
+        XCTAssertNotNil(narrative)
+        XCTAssertTrue(narrative?.detail.contains("throttling") ?? false,
+                      "Detail should mention thermal: \(narrative?.detail ?? "nil")")
+        XCTAssertFalse(narrative?.detail.contains("memory is tight") ?? true,
+                       "Detail should NOT claim memory is tight when only thermal fired")
+        XCTAssertFalse(narrative?.detail.contains("swapping") ?? true,
+                       "Detail should NOT claim swapping when only thermal fired")
+    }
+
+    func testThermalAmplifierNarrativeFires() {
+        let result = engine.evaluate(
+            snapshot: snapshot(thermal: .critical),
+            processes: [process(pid: 42, name: "ffmpeg", cpu: 250)]
+        )
+        let narrative = result.first { $0.title == "Cooling matters more than killing right now" }
+        XCTAssertNotNil(narrative)
+        XCTAssertTrue(narrative?.detail.contains("ffmpeg") ?? false)
+        XCTAssertEqual(narrative?.severity, .critical)
+    }
+
+    func testThermalAmplifierNeedsBothSignals() {
+        // Thermal alone — no narrative.
+        let onlyThermal = engine.evaluate(
+            snapshot: snapshot(thermal: .serious),
+            processes: []
+        )
+        XCTAssertNil(onlyThermal.first { $0.title == "Cooling matters more than killing right now" })
+
+        // Runaway alone — no narrative.
+        let onlyRunaway = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "ffmpeg", cpu: 250)]
+        )
+        XCTAssertNil(onlyRunaway.first { $0.title == "Cooling matters more than killing right now" })
+    }
+
+    func testDiskMemoryContentionNarrativeFires() {
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .warning),
+            processes: [process(name: "ffmpeg", readBps: 80 * .mb)]
+        )
+        let narrative = result.first { $0.title == "Disk and memory are fighting for the same SSD" }
+        XCTAssertNotNil(narrative)
+        XCTAssertTrue(narrative?.detail.contains("ffmpeg") ?? false)
+    }
+
+    func testDiskMemoryContentionYieldsToMemorySwapSpiral() {
+        // When both could fire, the more dire memory+swap story wins.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb),
+            processes: [process(name: "ffmpeg", readBps: 80 * .mb, writeBps: 0)]
+        )
+        let narratives = result.filter { $0.kind == .narrative }
+        XCTAssertEqual(narratives.count, 1)
+        XCTAssertEqual(narratives.first?.title, "Memory + swap death spiral")
+    }
+
+    func testDiskMemoryContentionYieldsToBackup() {
+        // Backup narrative takes precedence over the generic disk+memory story.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .warning),
+            processes: [
+                process(pid: 1, name: "bztransmit", readBps: 20 * .mb),
+                process(pid: 2, name: "ffmpeg", readBps: 80 * .mb)
+            ]
+        )
+        let narratives = result.filter { $0.kind == .narrative }
+        XCTAssertEqual(narratives.count, 1)
+        XCTAssertEqual(narratives.first?.title, "Foreground apps will feel frozen")
+    }
 }
 
 private extension UInt64 {
