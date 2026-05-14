@@ -10,8 +10,9 @@ BUILD_DIR=".build/release"
 DIST_DIR="dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
 
-echo "→ Building release binary..."
+echo "→ Building release binaries..."
 swift build -c release --product "${APP_NAME}"
+swift build -c release --product whirr-sampler
 
 echo "→ Assembling ${APP_BUNDLE}..."
 rm -rf "${APP_BUNDLE}"
@@ -30,3 +31,6 @@ echo
 echo "Run it:           open ${APP_BUNDLE}"
 echo "Install:          cp -R ${APP_BUNDLE} /Applications/"
 echo "Auto-launch:      System Settings → General → Login Items → add ${APP_NAME}"
+echo
+echo "Optional: install the privileged sampler daemon for root-process visibility:"
+echo "    sudo scripts/install-sampler.sh"

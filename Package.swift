@@ -20,6 +20,11 @@ let package = Package(
             dependencies: ["WhirrCore"],
             path: "Sources/WhirrProbe"
         ),
+        .executableTarget(
+            name: "whirr-sampler",
+            dependencies: ["WhirrCore"],
+            path: "Sources/WhirrSampler"
+        ),
         .testTarget(
             name: "WhirrCoreTests",
             dependencies: ["WhirrCore"],

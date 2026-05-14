@@ -61,16 +61,50 @@ actor SamplingPipeline {
         let snapshot: SystemSnapshot
         let processes: [ProcessSample]
         let diagnoses: [Diagnosis]
+        let source: Source
+
+        enum Source: Sendable { case daemon, inProcess }
     }
+
+    /// File written by `whirr-sampler` when the launchd daemon is installed.
+    /// If this file exists and is fresh, we use it (covers root processes);
+    /// otherwise we fall back to in-process sampling (works without the daemon).
+    private static let daemonSnapshotPath = "/Library/Application Support/Whirr/snapshot.json"
+
+    /// How stale the daemon's file can be before we treat it as gone.
+    /// Tied to the daemon's 3-second interval with comfortable slack.
+    private static let daemonFreshnessWindow: TimeInterval = 10
 
     private let processSampler = ProcessSampler()
     private let rules = RulesEngine()
+    private let decoder: JSONDecoder = {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
+    }()
 
     func tick() -> Result {
+        if let fromDaemon = readDaemonSnapshot() {
+            return fromDaemon
+        }
         let snapshot = SystemSampler.sample()
         let processes = processSampler.sample()
         let diagnoses = rules.evaluate(snapshot: snapshot, processes: processes)
-        return Result(snapshot: snapshot, processes: processes, diagnoses: diagnoses)
+        return Result(snapshot: snapshot, processes: processes, diagnoses: diagnoses, source: .inProcess)
+    }
+
+    private func readDaemonSnapshot() -> Result? {
+        let url = URL(fileURLWithPath: Self.daemonSnapshotPath)
+        guard let data = try? Data(contentsOf: url, options: .uncached) else { return nil }
+        guard let payload = try? decoder.decode(SnapshotPayload.self, from: data) else { return nil }
+        guard payload.formatVersion == SnapshotPayload.currentFormatVersion else { return nil }
+        guard Date().timeIntervalSince(payload.capturedAt) < Self.daemonFreshnessWindow else { return nil }
+        return Result(
+            snapshot: payload.snapshot,
+            processes: payload.processes,
+            diagnoses: payload.diagnoses,
+            source: .daemon
+        )
     }
 }
 

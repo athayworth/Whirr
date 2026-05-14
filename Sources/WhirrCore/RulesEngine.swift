@@ -134,15 +134,13 @@ struct ThermalThrottleRule: Rule {
             )
         case .fair, .nominal:
             return nil
-        @unknown default:
-            return nil
         }
     }
 }
 
 struct OverloadedSystemRule: Rule {
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
-        let load = ctx.snapshot.loadAverage.0
+        let load = ctx.snapshot.loadAverage.oneMinute
         let cores = Double(max(ctx.coreCount, 1))
         let ratio = load / cores
         guard ratio >= 1.5 else { return nil }

@@ -21,7 +21,7 @@ public enum SystemSampler {
             memoryFreeBytes: availableBytes,
             memoryPressure: classifyPressure(vm: vm),
             swapUsedBytes: swapUsedBytes(),
-            thermalState: ProcessInfo.processInfo.thermalState,
+            thermalState: ThermalState(ProcessInfo.processInfo.thermalState),
             loadAverage: currentLoadAverage()
         )
     }
@@ -46,11 +46,11 @@ public enum SystemSampler {
         return swap.xsu_used
     }
 
-    private static func currentLoadAverage() -> (Double, Double, Double) {
+    private static func currentLoadAverage() -> LoadAverage {
         var loads = [Double](repeating: 0, count: 3)
         let count = getloadavg(&loads, 3)
-        guard count == 3 else { return (0, 0, 0) }
-        return (loads[0], loads[1], loads[2])
+        guard count == 3 else { return .zero }
+        return LoadAverage(oneMinute: loads[0], fiveMinute: loads[1], fifteenMinute: loads[2])
     }
 
     private static func classifyPressure(vm: vm_statistics64_data_t) -> MemoryPressure {

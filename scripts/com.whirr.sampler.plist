@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.whirr.sampler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/whirr-sampler</string>
+        <string>--output</string>
+        <string>/Library/Application Support/Whirr/snapshot.json</string>
+        <string>--interval</string>
+        <string>3</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- If the daemon crashes, wait this long before restarting. Prevents
+         a crash-loop from spamming the system log. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Background priority so it never competes with foreground work. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/whirr-sampler.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/whirr-sampler.log</string>
+</dict>
+</plist>

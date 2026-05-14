@@ -68,8 +68,8 @@ print("  Memory free:     \(formatBytes(snapshot.memoryFreeBytes))")
 print("  Memory pressure: \(snapshot.memoryPressure)")
 print("  Swap used:       \(formatBytes(snapshot.swapUsedBytes))")
 print("  Thermal state:   \(snapshot.thermalState)")
-let (l1, l5, l15) = snapshot.loadAverage
-print("  Load avg:        \(String(format: "%.2f, %.2f, %.2f", l1, l5, l15))")
+let load = snapshot.loadAverage
+print("  Load avg:        \(String(format: "%.2f, %.2f, %.2f", load.oneMinute, load.fiveMinute, load.fifteenMinute))")
 
 if CommandLine.arguments.count > 1, let pid = Int32(CommandLine.arguments[1]) {
     print("\n[2/3] CPU API diagnostic")

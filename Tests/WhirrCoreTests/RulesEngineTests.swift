@@ -11,8 +11,8 @@ final class RulesEngineTests: XCTestCase {
         free: UInt64 = 8 * .gb,
         pressure: MemoryPressure = .normal,
         swap: UInt64 = 0,
-        thermal: ProcessInfo.ThermalState = .nominal,
-        load: (Double, Double, Double) = (1.0, 1.0, 1.0)
+        thermal: ThermalState = .nominal,
+        load: LoadAverage = LoadAverage(oneMinute: 1, fiveMinute: 1, fifteenMinute: 1)
     ) -> SystemSnapshot {
         SystemSnapshot(
             memoryUsedBytes: used,
@@ -104,7 +104,10 @@ final class RulesEngineTests: XCTestCase {
 
     func testLoadBelowRatioDoesNotFire() {
         // 4-core box at load 4.0 → ratio 1.0, under threshold
-        let result = engine.evaluate(snapshot: snapshot(load: (4.0, 4.0, 4.0)), processes: [])
+        let result = engine.evaluate(
+            snapshot: snapshot(load: LoadAverage(oneMinute: 4, fiveMinute: 4, fifteenMinute: 4)),
+            processes: []
+        )
         XCTAssertFalse(titles(result).contains("System is overloaded"))
     }
 
@@ -112,7 +115,7 @@ final class RulesEngineTests: XCTestCase {
         // Realistic stressed box: 1-minute load far above core count
         let cores = Double(ProcessInfo.processInfo.activeProcessorCount)
         let result = engine.evaluate(
-            snapshot: snapshot(load: (cores * 4.0, cores * 3.0, cores * 2.0)),
+            snapshot: snapshot(load: LoadAverage(oneMinute: cores * 4, fiveMinute: cores * 3, fifteenMinute: cores * 2)),
             processes: []
         )
         let overload = result.first { $0.title == "System is overloaded" }

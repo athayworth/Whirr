@@ -25,6 +25,33 @@ cp -R dist/Whirr.app /Applications/
 
 To launch at login: System Settings → General → Login Items → add Whirr.
 
+### Optional: privileged sampler daemon
+
+Without the daemon, Whirr can read CPU/memory/disk for processes owned by your user. To also see root-owned processes (`WindowServer`, `mds_stores`, `backupd`, Backblaze daemons, etc.), install the launchd-managed sampler:
+
+```sh
+./build.sh                          # builds the daemon binary too
+sudo scripts/install-sampler.sh     # installs and starts the daemon
+```
+
+What the install script does (review it before running):
+
+- Copies `whirr-sampler` to `/usr/local/bin/`
+- Creates `/Library/Application Support/Whirr/` (root-owned)
+- Drops `com.whirr.sampler.plist` in `/Library/LaunchDaemons/`
+- Loads the daemon, which writes `snapshot.json` to the data dir every 3 seconds
+- Logs to `/var/log/whirr-sampler.log`
+
+The menu bar app automatically prefers the daemon's snapshot when it's fresh (< 10 s old) and falls back to in-process sampling otherwise. There is no "is the daemon installed?" check — if the file is there and current, it's used.
+
+Output-path validation: the sampler refuses to write anywhere outside `/Library/Application Support/Whirr/`, even when launched with arbitrary command-line arguments. This is enforced even at root, so a misconfigured invocation can't redirect output.
+
+To uninstall:
+
+```sh
+sudo scripts/uninstall-sampler.sh
+```
+
 ## Develop
 
 ```sh
@@ -49,8 +76,13 @@ Sources/
     MenuBarView.swift       # Dropdown UI
     Resources/Info.plist    # LSUIElement=true (no dock icon)
   WhirrProbe/               # CLI test runner that prints a single diagnosis
+  WhirrSampler/             # Privileged sampler daemon (run as root via launchd)
 Tests/
-  WhirrCoreTests/           # XCTest unit tests for the rules engine
+  WhirrCoreTests/           # XCTest unit tests for the rules engine + payload codec
+scripts/
+  com.whirr.sampler.plist   # launchd plist for the sampler daemon
+  install-sampler.sh        # one-time install (requires sudo)
+  uninstall-sampler.sh      # tear-down (requires sudo)
 ```
 
 Sampling runs every 3 seconds on a background actor; UI updates on `@MainActor`. Per-process CPU% is computed by diffing cumulative CPU times across two samples (same approach as `top`).
