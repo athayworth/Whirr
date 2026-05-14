@@ -24,8 +24,25 @@ public final class ProcessSampler {
         let name: String
     }
 
+    /// Per-process CPU history is a small ring buffer of recent CPU%.
+    /// We keep just enough samples to recognize sustained high load — at
+    /// 3s sampling cadence, 20 samples covers a minute of history.
+    private static let maxHistorySamples = 20
+    /// A "high CPU sample" is one above this percentage. Single-core
+    /// pegging registers as 100% on macOS, so this catches the runaway-
+    /// dev-script case without flagging multi-threaded steady-state work
+    /// (browsers/editors typically don't sustain individual processes
+    /// above this on a healthy machine).
+    private static let highCpuThresholdPercent: Double = 60.0
+
     private var previous: [Int32: Timing] = [:]
     private var previousSampleTime: TimeInterval = 0
+    private var cpuHistory: [Int32: [Double]] = [:]
+    /// Cached command lines. We use `[Int32: String?]` so a failed read
+    /// (e.g. other-user process when we're not root) is remembered as
+    /// nil rather than retried every sample — that would otherwise burn
+    /// hundreds of sysctl calls per tick for no benefit.
+    private var commandLineCache: [Int32: String?] = [:]
     private let timebase: (numer: UInt32, denom: UInt32) = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
@@ -66,13 +83,19 @@ public final class ProcessSampler {
                     diskReadPerSec = 0
                     diskWritePerSec = 0
                 }
+
+                updateCpuHistory(pid: pid, cpuPercent: cpuPercent)
+                let sustained = sustainedHighSamples(pid: pid)
+
                 samples.append(ProcessSample(
                     pid: pid,
                     name: timing.name,
                     cpuPercent: cpuPercent,
                     memoryBytes: timing.residentBytes,
                     diskReadBytesPerSec: diskReadPerSec,
-                    diskWriteBytesPerSec: diskWritePerSec
+                    diskWriteBytesPerSec: diskWritePerSec,
+                    commandLine: commandLine(forPID: pid),
+                    sustainedHighCpuSamples: sustained
                 ))
             }
         }
@@ -80,7 +103,36 @@ public final class ProcessSampler {
         previous = current
         previousSampleTime = now
 
+        // Prune state for pids that disappeared since the last sample.
+        let currentPidSet = Set(current.keys)
+        cpuHistory = cpuHistory.filter { currentPidSet.contains($0.key) }
+        commandLineCache = commandLineCache.filter { currentPidSet.contains($0.key) }
+
         return samples.sorted { $0.cpuPercent > $1.cpuPercent }
+    }
+
+    private func updateCpuHistory(pid: Int32, cpuPercent: Double) {
+        var history = cpuHistory[pid, default: []]
+        history.append(cpuPercent)
+        if history.count > Self.maxHistorySamples {
+            history.removeFirst(history.count - Self.maxHistorySamples)
+        }
+        cpuHistory[pid] = history
+    }
+
+    private func sustainedHighSamples(pid: Int32) -> Int {
+        guard let history = cpuHistory[pid] else { return 0 }
+        // Count trailing samples (most recent) that exceed the threshold.
+        // A drop below the threshold resets the streak.
+        var count = 0
+        for value in history.reversed() {
+            if value >= Self.highCpuThresholdPercent {
+                count += 1
+            } else {
+                break
+            }
+        }
+        return count
     }
 
     private func currentTimings() -> [Int32: Timing] {
@@ -154,5 +206,77 @@ public final class ProcessSampler {
         let written = proc_name(pid, &buffer, UInt32(buffer.count))
         guard written > 0 else { return "pid \(pid)" }
         return String(cString: buffer)
+    }
+
+    /// Maximum joined-command-line length we expose. Long argvs (Electron
+    /// apps, browser renderers) blow this out; we keep things readable in
+    /// the UI and bounded in the wire format.
+    private static let commandLineCharLimit = 256
+
+    private func commandLine(forPID pid: Int32) -> String? {
+        if let cached = commandLineCache[pid] {
+            return cached
+        }
+        let value = readCommandLine(pid: pid)
+        commandLineCache[pid] = value
+        return value
+    }
+
+    /// Read the full argv for `pid` via the `KERN_PROCARGS2` sysctl. The
+    /// buffer layout is:
+    ///   [argc: Int32][exec_path: cstr][padding: \0…][argv[0..argc-1]: cstr…][envp: cstr…]
+    /// We pull argv only — exec_path is redundant with argv[0] for our
+    /// purposes, and envp can be huge / contain secrets.
+    private func readCommandLine(pid: Int32) -> String? {
+        // First, ask the kernel how big argv areas can be.
+        var argMaxMib: [Int32] = [CTL_KERN, KERN_ARGMAX]
+        var argMax: Int32 = 0
+        var argMaxSize = MemoryLayout<Int32>.size
+        guard sysctl(&argMaxMib, 2, &argMax, &argMaxSize, nil, 0) == 0, argMax > 0 else {
+            return nil
+        }
+
+        var procArgsMib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var actualSize = Int(argMax)
+        var buffer = Data(count: actualSize)
+        let rc = buffer.withUnsafeMutableBytes { rawBuf -> Int32 in
+            guard let base = rawBuf.baseAddress else { return -1 }
+            return sysctl(&procArgsMib, 3, base, &actualSize, nil, 0)
+        }
+        // Common failure modes (other-user process when not root, kernel
+        // tasks, very short-lived process) all surface as a non-zero return.
+        guard rc == 0, actualSize > MemoryLayout<Int32>.size else { return nil }
+
+        return buffer.withUnsafeBytes { rawBuf -> String? in
+            guard rawBuf.count >= actualSize else { return nil }
+            let argc = rawBuf.load(as: Int32.self)
+            guard argc > 0 else { return nil }
+
+            var offset = MemoryLayout<Int32>.size
+            // Skip the executable path (null-terminated).
+            while offset < actualSize && rawBuf[offset] != 0 { offset += 1 }
+            // Skip the run of zero bytes between exec_path and argv[0].
+            while offset < actualSize && rawBuf[offset] == 0 { offset += 1 }
+
+            var args: [String] = []
+            args.reserveCapacity(Int(argc))
+            for _ in 0..<argc {
+                guard offset < actualSize else { break }
+                let start = offset
+                while offset < actualSize && rawBuf[offset] != 0 { offset += 1 }
+                let bytes = rawBuf[start..<offset]
+                if let s = String(bytes: bytes, encoding: .utf8), !s.isEmpty {
+                    args.append(s)
+                }
+                if offset < actualSize { offset += 1 }
+            }
+
+            guard !args.isEmpty else { return nil }
+            let joined = args.joined(separator: " ")
+            if joined.count > Self.commandLineCharLimit {
+                return String(joined.prefix(Self.commandLineCharLimit)) + "…"
+            }
+            return joined
+        }
     }
 }

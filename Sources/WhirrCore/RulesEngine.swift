@@ -241,14 +241,44 @@ struct HighDiskIORule: Rule {
 }
 
 struct RunawayProcessRule: Rule {
+    /// Sample count required before we call something a sustained runaway.
+    /// At the nominal 3-second sampling cadence this is ~15 seconds — long
+    /// enough that brief compile/render spikes don't trip the rule.
+    static let minSustainedSamples = 5
+    /// Beyond this many sustained samples (~60 s) we promote to critical.
+    static let extendedSustainedSamples = 20
+    /// Approximate sampling cadence for converting sample counts to
+    /// human-readable seconds in diagnoses. The sampler enforces a
+    /// 1–60 s clamp; 3 s is the daemon's default and the menu bar app's.
+    private static let assumedIntervalSeconds = 3
+
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
-        guard let worst = ctx.topProcess, worst.cpuPercent >= 80 else { return nil }
+        let sustained = ctx.processes
+            .filter { $0.sustainedHighCpuSamples >= Self.minSustainedSamples }
+            .sorted { $0.cpuPercent > $1.cpuPercent }
+        guard let worst = sustained.first else { return nil }
+
+        let identity = displayCommandLine(for: worst)
+        let durationSeconds = worst.sustainedHighCpuSamples * Self.assumedIntervalSeconds
+        let severity: Severity =
+            (worst.cpuPercent >= 200 || worst.sustainedHighCpuSamples >= Self.extendedSustainedSamples)
+            ? .critical : .warning
         return Diagnosis(
-            title: "\(worst.name) is using a lot of CPU",
-            detail: String(format: "%.0f%% CPU on pid %d. If you weren't expecting this, the process may be stuck.", worst.cpuPercent, worst.pid),
-            severity: worst.cpuPercent >= 200 ? .critical : .warning,
+            title: "\(worst.name) has been pegging CPU",
+            detail: String(
+                format: "%@ has been over 60%% CPU for the last %d seconds — currently %.0f%%, pid %d. If you weren't expecting this, the process may be stuck.",
+                identity, durationSeconds, worst.cpuPercent, worst.pid
+            ),
+            severity: severity,
             culprits: [worst.name]
         )
+    }
+
+    private func displayCommandLine(for proc: ProcessSample) -> String {
+        guard let cmd = proc.commandLine, !cmd.isEmpty, cmd != proc.name else {
+            return proc.name
+        }
+        return cmd
     }
 }
 
@@ -297,7 +327,7 @@ struct ThermalThrottleAmplifierNarrative: NarrativeRule {
         let thermal = diagnoses.first(withTitle: "CPU is throttling from heat")
             ?? diagnoses.first(withTitle: "CPU is critically hot")
         guard let thermal else { return nil }
-        let runaway = diagnoses.first { $0.title.hasSuffix("is using a lot of CPU") }
+        let runaway = diagnoses.first { $0.title.hasSuffix("has been pegging CPU") }
         guard let runaway else { return nil }
 
         let culprit = runaway.culprits.first ?? "the top process"

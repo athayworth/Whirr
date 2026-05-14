@@ -47,6 +47,14 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
     public let memoryBytes: UInt64
     public let diskReadBytesPerSec: UInt64
     public let diskWriteBytesPerSec: UInt64
+    /// Full command line including arguments (truncated). Nil when the
+    /// caller couldn't read it — typically because the process is owned by
+    /// another user and we're not root.
+    public let commandLine: String?
+    /// Number of consecutive recent samples in which this process exceeded
+    /// the high-CPU threshold. Multiply by the sampling interval (3s
+    /// nominally) to convert to seconds of sustained load.
+    public let sustainedHighCpuSamples: Int
 
     public init(
         pid: Int32,
@@ -54,7 +62,9 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
         cpuPercent: Double,
         memoryBytes: UInt64,
         diskReadBytesPerSec: UInt64 = 0,
-        diskWriteBytesPerSec: UInt64 = 0
+        diskWriteBytesPerSec: UInt64 = 0,
+        commandLine: String? = nil,
+        sustainedHighCpuSamples: Int = 0
     ) {
         self.pid = pid
         self.name = name
@@ -62,6 +72,8 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
         self.memoryBytes = memoryBytes
         self.diskReadBytesPerSec = diskReadBytesPerSec
         self.diskWriteBytesPerSec = diskWriteBytesPerSec
+        self.commandLine = commandLine
+        self.sustainedHighCpuSamples = sustainedHighCpuSamples
     }
 
     public var diskIOBytesPerSec: UInt64 {

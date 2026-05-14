@@ -30,7 +30,9 @@ final class RulesEngineTests: XCTestCase {
         cpu: Double = 0,
         mem: UInt64 = 0,
         readBps: UInt64 = 0,
-        writeBps: UInt64 = 0
+        writeBps: UInt64 = 0,
+        commandLine: String? = nil,
+        sustained: Int = 0
     ) -> ProcessSample {
         ProcessSample(
             pid: pid,
@@ -38,7 +40,9 @@ final class RulesEngineTests: XCTestCase {
             cpuPercent: cpu,
             memoryBytes: mem,
             diskReadBytesPerSec: readBps,
-            diskWriteBytesPerSec: writeBps
+            diskWriteBytesPerSec: writeBps,
+            commandLine: commandLine,
+            sustainedHighCpuSamples: sustained
         )
     }
 
@@ -205,24 +209,55 @@ final class RulesEngineTests: XCTestCase {
 
     // MARK: - RunawayProcessRule
 
-    func testRunawayBelowThresholdDoesNotFire() {
-        let proc = process(name: "node", cpu: 50)
+    func testRunawayDoesNotFireOnBriefSpike() {
+        // High CPU but no sustained history — brief spike, not a runaway.
+        let proc = process(name: "node", cpu: 200, sustained: 1)
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
-        XCTAssertFalse(titles(result).contains { $0.contains("using a lot of CPU") })
+        XCTAssertFalse(titles(result).contains { $0.contains("pegging CPU") })
     }
 
-    func testRunawayWarningFiresAt100Percent() {
-        let proc = process(pid: 42, name: "node", cpu: 100)
+    func testRunawayFiresOnSustainedHighCpu() {
+        let proc = process(pid: 42, name: "node", cpu: 100, sustained: RunawayProcessRule.minSustainedSamples)
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         let diag = result.first { $0.title.contains("node") }
         XCTAssertEqual(diag?.severity, .warning)
+        XCTAssertTrue(diag?.detail.contains("seconds") ?? false)
     }
 
-    func testRunawayCriticalFiresAt250Percent() {
-        let proc = process(pid: 42, name: "ffmpeg", cpu: 250)
+    func testRunawayCriticalWhenVeryHigh() {
+        let proc = process(pid: 42, name: "ffmpeg", cpu: 250, sustained: RunawayProcessRule.minSustainedSamples)
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         let diag = result.first { $0.title.contains("ffmpeg") }
         XCTAssertEqual(diag?.severity, .critical)
+    }
+
+    func testRunawayCriticalWhenSustainedAtLength() {
+        // Even moderate CPU becomes critical once it persists past the
+        // extended-sustained window.
+        let proc = process(pid: 42, name: "rsync", cpu: 95, sustained: RunawayProcessRule.extendedSustainedSamples)
+        let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
+        let diag = result.first { $0.title.contains("rsync") }
+        XCTAssertEqual(diag?.severity, .critical)
+    }
+
+    func testRunawayDetailShowsCommandLineWhenAvailable() {
+        let proc = process(
+            pid: 42, name: "node", cpu: 195,
+            commandLine: "node /Users/me/projects/buggy-server.js",
+            sustained: RunawayProcessRule.minSustainedSamples
+        )
+        let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
+        let diag = result.first { $0.title.contains("node") }
+        XCTAssertTrue(diag?.detail.contains("buggy-server.js") ?? false,
+                      "Detail should include command line: \(diag?.detail ?? "nil")")
+    }
+
+    func testRunawayDetailFallsBackToNameWhenNoCommandLine() {
+        let proc = process(pid: 42, name: "kernel_task", cpu: 195, sustained: RunawayProcessRule.minSustainedSamples)
+        let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
+        let diag = result.first { $0.title.contains("kernel_task") }
+        XCTAssertNotNil(diag)
+        // No assertion on detail beyond that it doesn't crash — name fallback path.
     }
 
     // MARK: - Ordering
@@ -231,7 +266,8 @@ final class RulesEngineTests: XCTestCase {
         // Narratives lead, then standalone diagnoses are sorted by severity.
         // Pass processes CPU-desc to match ProcessSampler.sample()'s contract.
         let processes = [
-            process(pid: 2, name: "ffmpeg", cpu: 250),                     // runaway: .critical
+            process(pid: 2, name: "ffmpeg", cpu: 250,                      // runaway: .critical
+                    sustained: RunawayProcessRule.minSustainedSamples),
             process(pid: 1, name: "node", cpu: 10)                         // (no rule)
         ]
         let result = engine.evaluate(
@@ -327,7 +363,8 @@ final class RulesEngineTests: XCTestCase {
     func testThermalAmplifierNarrativeFires() {
         let result = engine.evaluate(
             snapshot: snapshot(thermal: .critical),
-            processes: [process(pid: 42, name: "ffmpeg", cpu: 250)]
+            processes: [process(pid: 42, name: "ffmpeg", cpu: 250,
+                                sustained: RunawayProcessRule.minSustainedSamples)]
         )
         let narrative = result.first { $0.title == "Cooling matters more than killing right now" }
         XCTAssertNotNil(narrative)
@@ -346,7 +383,8 @@ final class RulesEngineTests: XCTestCase {
         // Runaway alone — no narrative.
         let onlyRunaway = engine.evaluate(
             snapshot: snapshot(),
-            processes: [process(name: "ffmpeg", cpu: 250)]
+            processes: [process(name: "ffmpeg", cpu: 250,
+                                sustained: RunawayProcessRule.minSustainedSamples)]
         )
         XCTAssertNil(onlyRunaway.first { $0.title == "Cooling matters more than killing right now" })
     }

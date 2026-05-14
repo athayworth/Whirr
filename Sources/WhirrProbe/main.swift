@@ -93,7 +93,9 @@ for proc in processes.prefix(8) {
     let cpuStr = String(format: "%6.1f%%", proc.cpuPercent)
     let memStr = formatBytes(proc.memoryBytes).padding(toLength: 9, withPad: " ", startingAt: 0)
     let ioStr = formatRate(proc.diskIOBytesPerSec)
-    print("    \(cpuStr)  \(memStr)  io=\(ioStr)  pid=\(proc.pid)  \(proc.name)")
+    let cmd = proc.commandLine ?? "(\(proc.name))"
+    let truncatedCmd = cmd.count > 60 ? String(cmd.prefix(60)) + "…" : cmd
+    print("    \(cpuStr)  \(memStr)  io=\(ioStr)  pid=\(proc.pid)  \(truncatedCmd)")
 }
 
 let topByIO = processes.sorted { $0.diskIOBytesPerSec > $1.diskIOBytesPerSec }
