@@ -107,5 +107,16 @@ if let busiest = topByIO.first, busiest.diskIOBytesPerSec > 0 {
 }
 
 let diagnoses = RulesEngine().evaluate(snapshot: snapshot, processes: processes)
-print("\n  \(diagnoses.count) diagnoses raised by rules engine.")
+print("\n[Rules engine] \(diagnoses.count) diagnoses")
+for diagnosis in diagnoses {
+    let marker = diagnosis.kind == .narrative ? "★" : " "
+    let sev: String
+    switch diagnosis.severity {
+    case .critical: sev = "CRIT"
+    case .warning:  sev = "WARN"
+    case .ok:       sev = "OK  "
+    }
+    print("  \(marker) [\(sev)] \(diagnosis.title)")
+    print("           \(diagnosis.detail)")
+}
 print("\nDone.")

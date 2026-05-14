@@ -67,6 +67,13 @@ Sampling runs every 3 seconds on a background actor; UI updates on `@MainActor`.
 
 Adding a new rule = new `struct` conforming to `Rule` + one line in `RulesEngine.allRules`. Rules are pure functions of their inputs — see `Tests/WhirrCoreTests/RulesEngineTests.swift` for the testing pattern.
 
+### Narratives
+
+After the rules above fire, a second pass runs **narrative rules** that see the produced diagnoses and synthesize a multi-signal explanation. These render as a highlighted card at the top of the menu — the "why your Mac is slow" story rather than a list of facts.
+
+- **BackupChokingForegroundNarrative** — backup hogging + memory tight / swap / thermal throttle → "Foreground apps will feel frozen. Pause the backup."
+- **MemorySwapSpiralNarrative** — memory saturated + heavy swap (and no backup running) → names your top memory hog as the fastest win.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -12,13 +12,23 @@ public struct RulesEngine: Sendable {
             coreCount: ProcessInfo.processInfo.activeProcessorCount
         )
 
-        var results: [Diagnosis] = []
+        var standalone: [Diagnosis] = []
         for rule in Self.allRules {
             if let diagnosis = rule.evaluate(core) {
-                results.append(diagnosis)
+                standalone.append(diagnosis)
             }
         }
-        return results.sorted { $0.severity > $1.severity }
+        standalone.sort { $0.severity > $1.severity }
+
+        var narratives: [Diagnosis] = []
+        for narrative in Self.allNarratives {
+            if let diagnosis = narrative.evaluate(core, diagnoses: standalone) {
+                narratives.append(diagnosis)
+            }
+        }
+
+        // Narratives lead, then standalone diagnoses ordered by severity.
+        return narratives + standalone
     }
 
     private static let allRules: [any Rule] = [
@@ -29,6 +39,11 @@ public struct RulesEngine: Sendable {
         BackupHoggingRule(),
         HighDiskIORule(),
         RunawayProcessRule()
+    ]
+
+    private static let allNarratives: [any NarrativeRule] = [
+        BackupChokingForegroundNarrative(),
+        MemorySwapSpiralNarrative()
     ]
 }
 
@@ -50,6 +65,19 @@ struct CoreContext {
 
 protocol Rule: Sendable {
     func evaluate(_ ctx: CoreContext) -> Diagnosis?
+}
+
+/// A second-pass rule that sees the results of all standalone rules and
+/// can synthesize a multi-signal explanation. Returns nil if no recognizable
+/// pattern is present.
+protocol NarrativeRule: Sendable {
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis?
+}
+
+private extension Array where Element == Diagnosis {
+    func first(withTitle title: String) -> Diagnosis? {
+        first { $0.title == title }
+    }
 }
 
 // MARK: - Rules
@@ -221,5 +249,89 @@ struct RunawayProcessRule: Rule {
             severity: worst.cpuPercent >= 200 ? .critical : .warning,
             culprits: [worst.name]
         )
+    }
+}
+
+// MARK: - Narratives
+
+/// The OG Whirr scenario: a backup is hammering disk while memory is tight,
+/// so reads land on the same SSD bandwidth that backups are eating, and
+/// macOS can't compress fast enough to keep foreground apps responsive.
+struct BackupChokingForegroundNarrative: NarrativeRule {
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        guard let backup = diagnoses.first(withTitle: "Backup is using your system") else { return nil }
+
+        let memoryTight = diagnoses.first(withTitle: "Memory is tight")
+            ?? diagnoses.first(withTitle: "Memory is saturated")
+        let swapping = diagnoses.first(withTitle: "System is swapping heavily")
+        let thermal = diagnoses.first(withTitle: "CPU is throttling from heat")
+            ?? diagnoses.first(withTitle: "CPU is critically hot")
+
+        let secondarySignals = [memoryTight, swapping, thermal].compactMap { $0 }
+        guard !secondarySignals.isEmpty else { return nil }
+
+        let names = backup.culprits.sorted().joined(separator: ", ")
+        var pieces: [String] = []
+        if memoryTight != nil { pieces.append("memory is tight") }
+        if swapping != nil { pieces.append("the system is swapping") }
+        if thermal != nil { pieces.append("the CPU is throttling") }
+        let combinedSignals = listSentence(pieces)
+
+        let severity = secondarySignals.map(\.severity).max() ?? backup.severity
+        return Diagnosis(
+            title: "Foreground apps will feel frozen",
+            detail: "\(names) is eating disk and memory at the same time \(combinedSignals). "
+                + "Pause the backup — that frees disk bandwidth and lets the page compressor catch up.",
+            severity: severity,
+            culprits: backup.culprits,
+            kind: .narrative
+        )
+    }
+}
+
+/// Memory pressure + heavy swap = death spiral: every page-in trip costs SSD reads,
+/// SSD reads compete with whatever the user is doing, slow foreground apps allocate
+/// more memory, which causes more swap. Surface that the only fix is reducing memory load.
+struct MemorySwapSpiralNarrative: NarrativeRule {
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        let saturated = diagnoses.first(withTitle: "Memory is saturated")
+        let swapping = diagnoses.first(withTitle: "System is swapping heavily")
+        guard saturated != nil, let swap = swapping else { return nil }
+
+        // Don't compete with BackupChokingForegroundNarrative — it's a more specific story.
+        if diagnoses.first(withTitle: "Backup is using your system") != nil { return nil }
+
+        let topMemoryHog = ctx.processes
+            .sorted { $0.memoryBytes > $1.memoryBytes }
+            .first
+        let suggestion: String
+        if let hog = topMemoryHog, hog.memoryBytes >= 1_073_741_824 {
+            let gb = Double(hog.memoryBytes) / 1_073_741_824
+            suggestion = String(
+                format: "Top memory user is %@ at %.1f GB resident — closing it (or its tabs/files) is the fastest win.",
+                hog.name, gb
+            )
+        } else {
+            suggestion = "Quitting unused apps is the only real fix — adding more swap just makes the disk read more."
+        }
+
+        return Diagnosis(
+            title: "Memory + swap death spiral",
+            detail: "RAM is full and macOS is paging hard to disk. \(suggestion)",
+            severity: swap.severity,
+            culprits: topMemoryHog.map { [$0.name] } ?? [],
+            kind: .narrative
+        )
+    }
+}
+
+private func listSentence(_ pieces: [String]) -> String {
+    switch pieces.count {
+    case 0: return ""
+    case 1: return "and \(pieces[0])"
+    case 2: return "and \(pieces[0]) and \(pieces[1])"
+    default:
+        let head = pieces.dropLast().joined(separator: ", ")
+        return "and \(head), and \(pieces.last!)"
     }
 }

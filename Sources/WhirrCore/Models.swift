@@ -9,17 +9,32 @@ public enum Severity: Int, Comparable, Sendable {
 }
 
 public struct Diagnosis: Identifiable, Hashable, Sendable {
+    public enum Kind: Sendable {
+        case standalone
+        /// A diagnosis that explains how several standalone diagnoses interact
+        /// — rendered as a headline above the individual items.
+        case narrative
+    }
+
     public let id = UUID()
     public let title: String
     public let detail: String
     public let severity: Severity
     public let culprits: [String]
+    public let kind: Kind
 
-    public init(title: String, detail: String, severity: Severity, culprits: [String] = []) {
+    public init(
+        title: String,
+        detail: String,
+        severity: Severity,
+        culprits: [String] = [],
+        kind: Kind = .standalone
+    ) {
         self.title = title
         self.detail = detail
         self.severity = severity
         self.culprits = culprits
+        self.kind = kind
     }
 }
 

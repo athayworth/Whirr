@@ -49,7 +49,11 @@ struct MenuBarView: View {
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(monitor.diagnoses) { diagnosis in
-                    DiagnosisRow(diagnosis: diagnosis)
+                    if diagnosis.kind == .narrative {
+                        NarrativeCard(diagnosis: diagnosis)
+                    } else {
+                        DiagnosisRow(diagnosis: diagnosis)
+                    }
                 }
             }
         }
@@ -156,6 +160,40 @@ struct MenuBarView: View {
         case .ok:       return .green
         case .warning:  return .yellow
         case .critical: return .red
+        }
+    }
+}
+
+private struct NarrativeCard: View {
+    let diagnosis: Diagnosis
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "wand.and.stars")
+                    .foregroundStyle(severityColor)
+                Text(diagnosis.title)
+                    .font(.callout).bold()
+            }
+            Text(diagnosis.detail)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(severityColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(severityColor.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private var severityColor: Color {
+        switch diagnosis.severity {
+        case .critical: return .red
+        case .warning:  return .orange
+        case .ok:       return .blue
         }
     }
 }

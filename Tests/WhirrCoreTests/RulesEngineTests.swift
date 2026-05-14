@@ -224,25 +224,84 @@ final class RulesEngineTests: XCTestCase {
 
     // MARK: - Ordering
 
-    func testDiagnosesSortedBySeverityDescending() {
-        // Mix a critical, a warning, and an ok-severity diagnosis.
-        // Processes are passed in CPU-descending order, matching the
-        // contract that ProcessSampler.sample() provides to consumers.
+    func testStandaloneDiagnosesSortedBySeverityDescending() {
+        // Narratives lead, then standalone diagnoses are sorted by severity.
+        // Pass processes CPU-desc to match ProcessSampler.sample()'s contract.
         let processes = [
             process(pid: 2, name: "ffmpeg", cpu: 250),                     // runaway: .critical
-            process(pid: 1, name: "bzfilelist", cpu: 10)                   // backup: .ok
+            process(pid: 1, name: "node", cpu: 10)                         // (no rule)
         ]
         let result = engine.evaluate(
             snapshot: snapshot(pressure: .warning),                        // memory: .warning
             processes: processes
         )
-        XCTAssertGreaterThanOrEqual(result.count, 3)
-        for (a, b) in zip(result, result.dropFirst()) {
+        let standalone = result.filter { $0.kind == .standalone }
+        XCTAssertGreaterThanOrEqual(standalone.count, 2)
+        for (a, b) in zip(standalone, standalone.dropFirst()) {
             XCTAssertGreaterThanOrEqual(
                 a.severity, b.severity,
-                "Diagnoses not sorted: \(a.title)(\(a.severity)) before \(b.title)(\(b.severity))"
+                "Standalone diagnoses not sorted: \(a.title)(\(a.severity)) before \(b.title)(\(b.severity))"
             )
         }
+    }
+
+    func testNarrativesAppearBeforeStandaloneDiagnoses() {
+        // Backup + memory tight → BackupChokingForegroundNarrative fires.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .warning),
+            processes: [process(name: "bztransmit", cpu: 8)]
+        )
+        let firstStandaloneIdx = result.firstIndex { $0.kind == .standalone }
+        let lastNarrativeIdx = result.lastIndex { $0.kind == .narrative }
+        XCTAssertNotNil(firstStandaloneIdx)
+        XCTAssertNotNil(lastNarrativeIdx)
+        if let f = firstStandaloneIdx, let l = lastNarrativeIdx {
+            XCTAssertLessThan(l, f, "All narratives must precede all standalones")
+        }
+    }
+
+    // MARK: - Narrative rules
+
+    func testBackupChokingNarrativeFiresWhenBackupMeetsMemoryPressure() {
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .warning),
+            processes: [process(name: "bztransmit", cpu: 8)]
+        )
+        let narrative = result.first { $0.kind == .narrative }
+        XCTAssertEqual(narrative?.title, "Foreground apps will feel frozen")
+        XCTAssertTrue(narrative?.detail.contains("bztransmit") ?? false)
+    }
+
+    func testBackupChokingNarrativeDoesNotFireWithoutSecondarySignal() {
+        // Backup alone without memory/swap/thermal — no narrative.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "bztransmit", cpu: 8)]
+        )
+        XCTAssertFalse(result.contains { $0.kind == .narrative })
+    }
+
+    func testMemorySwapSpiralNarrativeFires() {
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb),
+            processes: [process(name: "Arc", mem: 8 * .gb)]
+        )
+        let narrative = result.first { $0.title == "Memory + swap death spiral" }
+        XCTAssertNotNil(narrative)
+        XCTAssertTrue(narrative?.detail.contains("Arc") ?? false,
+                      "Expected top memory hog named in narrative")
+    }
+
+    func testMemorySwapSpiralYieldsToBackupNarrative() {
+        // When both narratives qualify, the more specific Backup story wins —
+        // they shouldn't both fire and double up the message.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb),
+            processes: [process(name: "bztransmit", cpu: 8)]
+        )
+        let narratives = result.filter { $0.kind == .narrative }
+        XCTAssertEqual(narratives.count, 1)
+        XCTAssertEqual(narratives.first?.title, "Foreground apps will feel frozen")
     }
 }
 
