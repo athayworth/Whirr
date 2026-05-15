@@ -32,7 +32,8 @@ final class RulesEngineTests: XCTestCase {
         readBps: UInt64 = 0,
         writeBps: UInt64 = 0,
         commandLine: String? = nil,
-        sustained: Int = 0
+        sustained: Int = 0,
+        idle: Int = 0
     ) -> ProcessSample {
         ProcessSample(
             pid: pid,
@@ -42,7 +43,8 @@ final class RulesEngineTests: XCTestCase {
             diskReadBytesPerSec: readBps,
             diskWriteBytesPerSec: writeBps,
             commandLine: commandLine,
-            sustainedHighCpuSamples: sustained
+            sustainedHighCpuSamples: sustained,
+            sustainedIdleSamples: idle
         )
     }
 
@@ -543,6 +545,68 @@ final class RulesEngineTests: XCTestCase {
             ]
         )
         XCTAssertNil(result.first { $0.title == "Docker is using significant resources" })
+    }
+
+    // MARK: - IdleMemoryHogsNarrative
+
+    func testIdleMemoryHogsFires() {
+        // Two idle 2 GB processes — combined 4 GB, above the 2 GB threshold.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [
+                process(pid: 1, name: "node",
+                        mem: 2 * .gb,
+                        idle: IdleMemoryHogsNarrative.minIdleSamples + 50),
+                process(pid: 2, name: "java",
+                        mem: 2 * .gb,
+                        idle: IdleMemoryHogsNarrative.minIdleSamples + 20)
+            ]
+        )
+        let narrative = result.first { $0.title == "Big processes that look unused" }
+        XCTAssertNotNil(narrative)
+        XCTAssertEqual(narrative?.severity, .ok)  // Informational, not alarming
+        XCTAssertTrue(narrative?.detail.contains("node") ?? false)
+        XCTAssertTrue(narrative?.detail.contains("java") ?? false)
+    }
+
+    func testIdleMemoryHogsStaysQuietBelowCombinedThreshold() {
+        // A single big idle process is below the 2 GB combined threshold.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [
+                process(pid: 1, name: "node",
+                        mem: 1 * .gb,
+                        idle: IdleMemoryHogsNarrative.minIdleSamples + 50)
+            ]
+        )
+        XCTAssertNil(result.first { $0.title == "Big processes that look unused" })
+    }
+
+    func testIdleMemoryHogsIgnoresSmallProcesses() {
+        // Even if a 200 MB process has been idle forever, it's not worth flagging.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [
+                process(pid: 1, name: "small-server",
+                        mem: 200 * .mb,
+                        idle: 10_000)
+            ]
+        )
+        XCTAssertNil(result.first { $0.title == "Big processes that look unused" })
+    }
+
+    func testIdleMemoryHogsRequiresSustainedIdleness() {
+        // A 4 GB process that's only been idle for 1 minute isn't a candidate —
+        // could just be between operations.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [
+                process(pid: 1, name: "node",
+                        mem: 4 * .gb,
+                        idle: 5)  // Way below minIdleSamples
+            ]
+        )
+        XCTAssertNil(result.first { $0.title == "Big processes that look unused" })
     }
 }
 

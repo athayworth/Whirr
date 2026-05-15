@@ -53,7 +53,8 @@ public struct RulesEngine: Sendable {
         DiskMemoryContentionNarrative(),
         WindowServerHogNarrative(),
         SpotlightReindexNarrative(),
-        DockerStrainNarrative()
+        DockerStrainNarrative(),
+        IdleMemoryHogsNarrative()
     ]
 }
 
@@ -591,6 +592,73 @@ struct SpotlightReindexNarrative: NarrativeRule {
             culprits: active.map(\.name),
             kind: .narrative
         )
+    }
+}
+
+/// Surfaces big processes that haven't done CPU work in a while —
+/// answers "am I even using this?" for the dev environment case: half-
+/// remembered local servers, an IDE left open, browser tabs you forgot.
+/// Stays silent unless the *combined* recoverable memory is meaningful.
+///
+/// Filters by a memory floor (we don't flag a 200 MB process) and a
+/// minimum idle streak (don't flag something that just paused for a
+/// few seconds), then aggregates so the user sees one card with N
+/// candidates rather than N separate diagnoses.
+struct IdleMemoryHogsNarrative: NarrativeRule {
+    /// Per-process memory floor for being flagged. 500 MB is the threshold
+    /// below which closing the process isn't really worth the bother.
+    static let memoryFloorBytes: UInt64 = 500 * 1_048_576
+    /// How many consecutive idle samples (CPU < 1%) a process needs before
+    /// we call it idle-enough-to-mention. At 3 s sampling, 100 samples is
+    /// 5 minutes — short bursts of inactivity (between requests on a dev
+    /// server, between keystrokes in an IDE) don't trip the rule.
+    static let minIdleSamples = 100
+    /// Combined recoverable memory threshold for firing the narrative.
+    /// One idle 600 MB process probably isn't worth a card; 2 GB across
+    /// several is.
+    static let combinedMemoryThresholdBytes: UInt64 = 2 * 1_073_741_824
+    /// Approximate sampling cadence for converting sample counts to
+    /// minutes in the user-facing message.
+    private static let assumedIntervalSeconds = 3
+
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        let candidates = ctx.processes
+            .filter {
+                $0.memoryBytes >= Self.memoryFloorBytes
+                && $0.sustainedIdleSamples >= Self.minIdleSamples
+            }
+            .sorted { $0.memoryBytes > $1.memoryBytes }
+        guard !candidates.isEmpty else { return nil }
+
+        let combined = candidates.reduce(UInt64(0)) { $0 &+ $1.memoryBytes }
+        guard combined >= Self.combinedMemoryThresholdBytes else { return nil }
+
+        let combinedGB = Double(combined) / 1_073_741_824
+        let topThree = candidates.prefix(3)
+        let oldestIdleMinutes = (candidates.map(\.sustainedIdleSamples).max() ?? 0)
+            * Self.assumedIntervalSeconds / 60
+
+        let pieces = topThree.map { proc -> String in
+            "\(proc.name) (\(formatMemory(proc.memoryBytes)))"
+        }
+        let extra = candidates.count > 3 ? ", +\(candidates.count - 3) more" : ""
+        let detail = String(
+            format: "%@%@ have been idle for ≥ %d min. Closing them would free roughly %.1f GB. Skip any servers you want kept warm.",
+            pieces.joined(separator: ", "), extra, oldestIdleMinutes, combinedGB
+        )
+        return Diagnosis(
+            title: "Big processes that look unused",
+            detail: detail,
+            severity: .ok,
+            culprits: candidates.map(\.name),
+            kind: .narrative
+        )
+    }
+
+    private func formatMemory(_ bytes: UInt64) -> String {
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
+        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
     }
 }
 

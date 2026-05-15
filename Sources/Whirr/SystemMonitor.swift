@@ -53,24 +53,23 @@ final class SystemMonitor {
         let dockerClient = self.dockerClient
         taskBox.task = Task { [weak self] in
             // Prime the per-process CPU sampler so the next sample produces real deltas.
-            _ = await pipeline.tick()
+            _ = await pipeline.tick(containers: [])
             try? await Task.sleep(for: .seconds(2))
 
             var tickCount = 0
+            var lastKnownContainers: [DockerContainer] = []
             while !Task.isCancelled {
-                let result = await pipeline.tick()
-                // Poll Docker every other tick (~6 s) — its API is comparatively
-                // slow per request and per-container stats don't change minute
-                // to minute. Lets sampling stay snappy when Docker is busy.
-                let containers: [DockerContainer]?
+                // Poll Docker every other tick (~6 s) — the API is slow per
+                // request and per-container stats don't change minute to
+                // minute. Reuse the last-known list on intermediate ticks so
+                // the rules engine still sees container data.
                 if tickCount % 2 == 0 {
-                    containers = await dockerClient.listContainers()
-                } else {
-                    containers = nil
+                    lastKnownContainers = await dockerClient.listContainers()
                 }
+                let result = await pipeline.tick(containers: lastKnownContainers)
                 await MainActor.run {
                     self?.apply(result)
-                    if let containers { self?.dockerContainers = containers }
+                    self?.dockerContainers = lastKnownContainers
                 }
                 tickCount += 1
                 try? await Task.sleep(for: .seconds(3))
@@ -146,13 +145,17 @@ actor SamplingPipeline {
         return d
     }()
 
-    func tick() -> Result {
-        if let fromDaemon = readDaemonSnapshot() {
+    func tick(containers: [DockerContainer]) -> Result {
+        if let fromDaemon = readDaemonSnapshot(containers: containers) {
             return fromDaemon
         }
         let snapshot = SystemSampler.sample()
         let processes = processSampler.sample()
-        let diagnoses = rules.evaluate(snapshot: snapshot, processes: processes)
+        let diagnoses = rules.evaluate(
+            snapshot: snapshot,
+            processes: processes,
+            dockerContainers: containers
+        )
         // No daemon means no shared history file — return what we have
         // (just the current point isn't useful, so an empty array signals
         // "history not available" to the UI).
@@ -165,7 +168,7 @@ actor SamplingPipeline {
         )
     }
 
-    private func readDaemonSnapshot() -> Result? {
+    private func readDaemonSnapshot(containers: [DockerContainer]) -> Result? {
         let url = URL(fileURLWithPath: Self.daemonSnapshotPath)
         guard let data = try? Data(contentsOf: url, options: .uncached) else { return nil }
         guard let payload = try? decoder.decode(SnapshotPayload.self, from: data) else { return nil }
@@ -175,7 +178,12 @@ actor SamplingPipeline {
         // than trusting payload.diagnoses. The daemon's rule set is whatever
         // shipped with the installed binary, which may be stale relative to
         // the app's; this way rule changes ship with the next app build.
-        let diagnoses = rules.evaluate(snapshot: payload.snapshot, processes: payload.processes)
+        // Container stats come from the menu bar (user-mode); pass them in.
+        let diagnoses = rules.evaluate(
+            snapshot: payload.snapshot,
+            processes: payload.processes,
+            dockerContainers: containers
+        )
         return Result(
             snapshot: payload.snapshot,
             processes: payload.processes,

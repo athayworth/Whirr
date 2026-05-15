@@ -59,6 +59,11 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
     /// the high-CPU threshold. Multiply by the sampling interval (3s
     /// nominally) to convert to seconds of sustained load.
     public let sustainedHighCpuSamples: Int
+    /// Number of consecutive recent samples in which this process was below
+    /// the idle-CPU threshold. Used to identify big-but-quiescent processes
+    /// (dev servers you left running, IDEs you forgot about) that the user
+    /// might want to close to recover RAM.
+    public let sustainedIdleSamples: Int
 
     public init(
         pid: Int32,
@@ -68,7 +73,8 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
         diskReadBytesPerSec: UInt64 = 0,
         diskWriteBytesPerSec: UInt64 = 0,
         commandLine: String? = nil,
-        sustainedHighCpuSamples: Int = 0
+        sustainedHighCpuSamples: Int = 0,
+        sustainedIdleSamples: Int = 0
     ) {
         self.pid = pid
         self.name = name
@@ -78,6 +84,7 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
         self.diskWriteBytesPerSec = diskWriteBytesPerSec
         self.commandLine = commandLine
         self.sustainedHighCpuSamples = sustainedHighCpuSamples
+        self.sustainedIdleSamples = sustainedIdleSamples
     }
 
     public var diskIOBytesPerSec: UInt64 {

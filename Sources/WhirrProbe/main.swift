@@ -151,6 +151,17 @@ for proc in processes.prefix(8) {
     print("    \(cpuStr)  \(memStr)  io=\(ioStr)  pid=\(proc.pid)  \(truncatedCmd)")
 }
 
+let bigIdle = processes
+    .filter { $0.memoryBytes >= 500 * 1_048_576 && $0.sustainedIdleSamples >= 2 }
+    .sorted { $0.memoryBytes > $1.memoryBytes }
+if !bigIdle.isEmpty {
+    print("  Idle candidates (>= 500 MB, idle for >= 2 samples):")
+    for proc in bigIdle.prefix(8) {
+        let memStr = formatBytes(proc.memoryBytes).padding(toLength: 9, withPad: " ", startingAt: 0)
+        print("    \(memStr)  idle=\(proc.sustainedIdleSamples)  \(proc.name)")
+    }
+}
+
 let topByIO = processes.sorted { $0.diskIOBytesPerSec > $1.diskIOBytesPerSec }
 if let busiest = topByIO.first, busiest.diskIOBytesPerSec > 0 {
     print("  Top 5 by disk I/O:")

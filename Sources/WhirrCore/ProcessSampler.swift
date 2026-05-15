@@ -24,20 +24,25 @@ public final class ProcessSampler {
         let name: String
     }
 
-    /// Per-process CPU history is a small ring buffer of recent CPU%.
-    /// We keep just enough samples to recognize sustained high load — at
-    /// 3s sampling cadence, 20 samples covers a minute of history.
-    private static let maxHistorySamples = 20
     /// A "high CPU sample" is one above this percentage. Single-core
     /// pegging registers as 100% on macOS, so this catches the runaway-
     /// dev-script case without flagging multi-threaded steady-state work
     /// (browsers/editors typically don't sustain individual processes
     /// above this on a healthy machine).
     private static let highCpuThresholdPercent: Double = 60.0
+    /// Below this, we consider the process effectively idle. 1% is low
+    /// enough that background-housekeeping ticks (signal handlers, OS
+    /// callbacks) don't reset the counter on every sample.
+    private static let idleCpuThresholdPercent: Double = 1.0
 
     private var previous: [Int32: Timing] = [:]
     private var previousSampleTime: TimeInterval = 0
-    private var cpuHistory: [Int32: [Double]] = [:]
+    /// Per-pid counter of consecutive high-CPU samples. Grows unbounded
+    /// while the streak holds, resets to 0 the moment CPU drops below the
+    /// threshold. Simpler and longer-lived than the previous ring-buffer
+    /// approach.
+    private var sustainedHighCounts: [Int32: Int] = [:]
+    private var sustainedIdleCounts: [Int32: Int] = [:]
     /// Cached command lines. We use `[Int32: String?]` so a failed read
     /// (e.g. other-user process when we're not root) is remembered as
     /// nil rather than retried every sample — that would otherwise burn
@@ -84,8 +89,7 @@ public final class ProcessSampler {
                     diskWritePerSec = 0
                 }
 
-                updateCpuHistory(pid: pid, cpuPercent: cpuPercent)
-                let sustained = sustainedHighSamples(pid: pid)
+                updateSustainedCounters(pid: pid, cpuPercent: cpuPercent)
 
                 samples.append(ProcessSample(
                     pid: pid,
@@ -95,7 +99,8 @@ public final class ProcessSampler {
                     diskReadBytesPerSec: diskReadPerSec,
                     diskWriteBytesPerSec: diskWritePerSec,
                     commandLine: commandLine(forPID: pid),
-                    sustainedHighCpuSamples: sustained
+                    sustainedHighCpuSamples: sustainedHighCounts[pid] ?? 0,
+                    sustainedIdleSamples: sustainedIdleCounts[pid] ?? 0
                 ))
             }
         }
@@ -105,34 +110,24 @@ public final class ProcessSampler {
 
         // Prune state for pids that disappeared since the last sample.
         let currentPidSet = Set(current.keys)
-        cpuHistory = cpuHistory.filter { currentPidSet.contains($0.key) }
+        sustainedHighCounts = sustainedHighCounts.filter { currentPidSet.contains($0.key) }
+        sustainedIdleCounts = sustainedIdleCounts.filter { currentPidSet.contains($0.key) }
         commandLineCache = commandLineCache.filter { currentPidSet.contains($0.key) }
 
         return samples.sorted { $0.cpuPercent > $1.cpuPercent }
     }
 
-    private func updateCpuHistory(pid: Int32, cpuPercent: Double) {
-        var history = cpuHistory[pid, default: []]
-        history.append(cpuPercent)
-        if history.count > Self.maxHistorySamples {
-            history.removeFirst(history.count - Self.maxHistorySamples)
+    private func updateSustainedCounters(pid: Int32, cpuPercent: Double) {
+        if cpuPercent >= Self.highCpuThresholdPercent {
+            sustainedHighCounts[pid, default: 0] += 1
+        } else {
+            sustainedHighCounts[pid] = 0
         }
-        cpuHistory[pid] = history
-    }
-
-    private func sustainedHighSamples(pid: Int32) -> Int {
-        guard let history = cpuHistory[pid] else { return 0 }
-        // Count trailing samples (most recent) that exceed the threshold.
-        // A drop below the threshold resets the streak.
-        var count = 0
-        for value in history.reversed() {
-            if value >= Self.highCpuThresholdPercent {
-                count += 1
-            } else {
-                break
-            }
+        if cpuPercent < Self.idleCpuThresholdPercent {
+            sustainedIdleCounts[pid, default: 0] += 1
+        } else {
+            sustainedIdleCounts[pid] = 0
         }
-        return count
     }
 
     private func currentTimings() -> [Int32: Timing] {
