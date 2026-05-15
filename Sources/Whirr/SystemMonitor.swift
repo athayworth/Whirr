@@ -12,6 +12,7 @@ final class SystemMonitor {
 
     private let pipeline = SamplingPipeline()
     private let taskBox = TaskBox()
+    private let notifications = NotificationService()
 
     init() {
         start()
@@ -53,6 +54,7 @@ final class SystemMonitor {
         self.topProcesses = Array(result.processes.prefix(8))
         self.diagnoses = result.diagnoses
         self.lastUpdated = Date()
+        notifications.process(result.diagnoses)
     }
 }
 
@@ -99,10 +101,15 @@ actor SamplingPipeline {
         guard let payload = try? decoder.decode(SnapshotPayload.self, from: data) else { return nil }
         guard payload.formatVersion == SnapshotPayload.currentFormatVersion else { return nil }
         guard Date().timeIntervalSince(payload.capturedAt) < Self.daemonFreshnessWindow else { return nil }
+        // Re-run the rules engine on the daemon's snapshot + processes rather
+        // than trusting payload.diagnoses. The daemon's rule set is whatever
+        // shipped with the installed binary, which may be stale relative to
+        // the app's; this way rule changes ship with the next app build.
+        let diagnoses = rules.evaluate(snapshot: payload.snapshot, processes: payload.processes)
         return Result(
             snapshot: payload.snapshot,
             processes: payload.processes,
-            diagnoses: payload.diagnoses,
+            diagnoses: diagnoses,
             source: .daemon
         )
     }

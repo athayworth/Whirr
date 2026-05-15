@@ -423,6 +423,75 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertEqual(narratives.count, 1)
         XCTAssertEqual(narratives.first?.title, "Foreground apps will feel frozen")
     }
+
+    // MARK: - WindowServerHogNarrative
+
+    func testWindowServerNarrativeFiresAtHighCpu() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "WindowServer", cpu: 75)]
+        )
+        let narrative = result.first { $0.title == "Graphics layer is bottlenecking" }
+        XCTAssertEqual(narrative?.severity, .warning)
+    }
+
+    func testWindowServerNarrativeCriticalAt100Percent() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "WindowServer", cpu: 130)]
+        )
+        let narrative = result.first { $0.title == "Graphics layer is bottlenecking" }
+        XCTAssertEqual(narrative?.severity, .critical)
+    }
+
+    func testWindowServerNarrativeDoesNotFireWhenIdle() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "WindowServer", cpu: 20)]
+        )
+        XCTAssertNil(result.first { $0.title == "Graphics layer is bottlenecking" })
+    }
+
+    // MARK: - SpotlightReindexNarrative
+
+    func testSpotlightNarrativeFiresOnHighDiskIO() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "mds_stores", cpu: 5, readBps: 60 * .mb)]
+        )
+        let narrative = result.first { $0.title == "Spotlight is reindexing" }
+        XCTAssertNotNil(narrative)
+        XCTAssertTrue(narrative?.detail.contains("rebuilding") ?? false)
+    }
+
+    func testSpotlightNarrativeFiresOnSustainedCpu() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "mds_stores", cpu: 100,
+                                sustained: RunawayProcessRule.minSustainedSamples)]
+        )
+        let narrative = result.first { $0.title == "Spotlight is reindexing" }
+        XCTAssertNotNil(narrative)
+    }
+
+    func testSpotlightSuppressesGenericDiskBusyDiagnosis() {
+        // HighDiskIORule should NOT fire for mds_stores — Spotlight narrative
+        // owns that story with better framing.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "mds_stores", cpu: 5, readBps: 100 * .mb)]
+        )
+        XCTAssertFalse(titles(result).contains("Disk is busy"))
+        XCTAssertTrue(titles(result).contains("Spotlight is reindexing"))
+    }
+
+    func testSpotlightDoesNotFireWhenIdle() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(name: "mds_stores", cpu: 1, readBps: 0)]
+        )
+        XCTAssertNil(result.first { $0.title == "Spotlight is reindexing" })
+    }
 }
 
 private extension UInt64 {

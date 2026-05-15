@@ -61,6 +61,37 @@ func diagnoseCPUAPIs(forPID pid: Int32) {
 print("Whirr Probe")
 print("--------------------------------------------------")
 
+// Optional: read the daemon's snapshot file and re-evaluate rules against
+// it (matches the menu bar app's path when the daemon is installed).
+if CommandLine.arguments.contains("--use-daemon") {
+    let url = URL(fileURLWithPath: "/Library/Application Support/Whirr/snapshot.json")
+    guard let data = try? Data(contentsOf: url) else {
+        print("Daemon snapshot not found at \(url.path)")
+        exit(1)
+    }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    guard let payload = try? decoder.decode(SnapshotPayload.self, from: data) else {
+        print("Could not decode daemon snapshot.")
+        exit(1)
+    }
+    let diagnoses = RulesEngine().evaluate(snapshot: payload.snapshot, processes: payload.processes)
+    print("[Daemon path] \(payload.processes.count) processes, captured \(payload.capturedAt)")
+    print("[Rules engine] \(diagnoses.count) diagnoses")
+    for diagnosis in diagnoses {
+        let marker = diagnosis.kind == .narrative ? "★" : " "
+        let sev: String
+        switch diagnosis.severity {
+        case .critical: sev = "CRIT"
+        case .warning:  sev = "WARN"
+        case .ok:       sev = "OK  "
+        }
+        print("  \(marker) [\(sev)] \(diagnosis.title)")
+        print("           \(diagnosis.detail)")
+    }
+    exit(0)
+}
+
 let snapshot = SystemSampler.sample()
 print("\n[1/3] System sampler")
 print("  Memory used:     \(formatBytes(snapshot.memoryUsedBytes))")

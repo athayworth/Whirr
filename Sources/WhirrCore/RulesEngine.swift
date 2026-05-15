@@ -45,7 +45,9 @@ public struct RulesEngine: Sendable {
         BackupChokingForegroundNarrative(),
         MemorySwapSpiralNarrative(),
         ThermalThrottleAmplifierNarrative(),
-        DiskMemoryContentionNarrative()
+        DiskMemoryContentionNarrative(),
+        WindowServerHogNarrative(),
+        SpotlightReindexNarrative()
     ]
 }
 
@@ -221,10 +223,14 @@ struct HighDiskIORule: Rule {
     private static let criticalThreshold: UInt64 = 200 * 1_048_576
 
     // Backup processes are handled by BackupHoggingRule — don't double-fire.
+    // Spotlight (mds_stores, mds) is handled by SpotlightReindexNarrative,
+    // which has the right user-facing framing for "your Mac is reindexing,
+    // wait it out."
     private static let excluded: Set<String> = [
         "bzserv", "bztransmit", "bzfilelist", "bzbmenu",
         "backupd", "backupd-helper",
-        "rsync", "restic", "borg"
+        "rsync", "restic", "borg",
+        "mds_stores", "mds"
     ]
 
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
@@ -412,6 +418,77 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
             detail: "RAM is full and macOS is paging hard to disk. \(suggestion)",
             severity: swap.severity,
             culprits: topMemoryHog.map { [$0.name] } ?? [],
+            kind: .narrative
+        )
+    }
+}
+
+/// WindowServer eating CPU usually traces back to a graphics-heavy app
+/// (Chrome with hundreds of tabs, an Electron app, video playback,
+/// screen-recording software). The fastest fix is to identify and close
+/// that app, not to look at WindowServer itself.
+///
+/// Only meaningful when the daemon is installed — WindowServer runs as
+/// _windowserver, not the user, so unprivileged Whirr can't see its CPU%.
+struct WindowServerHogNarrative: NarrativeRule {
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        guard let ws = ctx.processes.first(where: { $0.name == "WindowServer" }),
+              ws.cpuPercent >= 50 else {
+            return nil
+        }
+        let severity: Severity = ws.cpuPercent >= 100 ? .critical : .warning
+        return Diagnosis(
+            title: "Graphics layer is bottlenecking",
+            detail: String(
+                format: "WindowServer is at %.0f%% CPU — usually a heavy graphics app (Chrome/Safari with many tabs, an Electron app, fullscreen video, a screen recorder) is the cause. Closing or relaunching the heaviest one is the fastest fix.",
+                ws.cpuPercent
+            ),
+            severity: severity,
+            culprits: ["WindowServer"],
+            kind: .narrative
+        )
+    }
+}
+
+/// Spotlight's mds_stores can dominate a Mac for 10–30 minutes during a
+/// reindex (new volume mounted, large file move, system update). Surface
+/// this as "wait it out" rather than as a generic disk/CPU diagnosis,
+/// because the right action is to do nothing.
+///
+/// Only meaningful when the daemon is installed — mds and mds_stores run
+/// as root.
+struct SpotlightReindexNarrative: NarrativeRule {
+    private static let mdsNames: Set<String> = ["mds_stores", "mds"]
+    private static let activeIOThreshold: UInt64 = 20 * 1_048_576
+
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        let mds = ctx.processes.filter { Self.mdsNames.contains($0.name) }
+        let active = mds.filter {
+            $0.sustainedHighCpuSamples >= RunawayProcessRule.minSustainedSamples
+                || $0.diskIOBytesPerSec >= Self.activeIOThreshold
+        }
+        guard !active.isEmpty else { return nil }
+
+        let totalCPU = active.reduce(0.0) { $0 + $1.cpuPercent }
+        let totalIO = active.reduce(UInt64(0)) { $0 &+ $1.diskIOBytesPerSec }
+
+        let detail: String
+        if totalIO >= Self.activeIOThreshold {
+            detail = String(
+                format: "Spotlight is rebuilding its index — mds_stores is reading from disk at %@. Expect 10–30 minutes of degraded performance until it finishes. Common triggers: new volume mounted, large file move, recent system update.",
+                formatMBps(totalIO)
+            )
+        } else {
+            detail = String(
+                format: "Spotlight is reindexing — mds_stores is using %.0f%% CPU. Expect 10–30 minutes of degraded performance until it finishes. The right move is usually to wait it out, not to kill it (it'll just restart).",
+                totalCPU
+            )
+        }
+        return Diagnosis(
+            title: "Spotlight is reindexing",
+            detail: detail,
+            severity: .warning,
+            culprits: active.map(\.name),
             kind: .narrative
         )
     }
