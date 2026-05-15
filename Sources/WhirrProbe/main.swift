@@ -61,6 +61,28 @@ func diagnoseCPUAPIs(forPID pid: Int32) {
 print("Whirr Probe")
 print("--------------------------------------------------")
 
+// Optional: hit the Docker socket and dump container stats.
+if CommandLine.arguments.contains("--docker") {
+    let client = DockerClient()
+    let containers = await client.listContainers()
+    if containers.isEmpty {
+        print("No containers visible (Docker stopped, or none running).")
+    } else {
+        print("\(containers.count) container(s):")
+        for c in containers.sorted(by: { $0.memoryBytes > $1.memoryBytes }) {
+            let memMB = Double(c.memoryBytes) / 1_048_576
+            let memStr = memMB >= 1024
+                ? String(format: "%.1f GB", memMB / 1024)
+                : String(format: "%.0f MB", memMB)
+            let cpuStr = String(format: "%6.1f%%", c.cpuPercent)
+            let namePadded = c.name.padding(toLength: 30, withPad: " ", startingAt: 0)
+            let memPadded = memStr.padding(toLength: 9, withPad: " ", startingAt: 0)
+            print("  \(namePadded) \(cpuStr)  \(memPadded)  \(c.image)")
+        }
+    }
+    exit(0)
+}
+
 // Optional: read the daemon's snapshot file and re-evaluate rules against
 // it (matches the menu bar app's path when the daemon is installed).
 if CommandLine.arguments.contains("--use-daemon") {

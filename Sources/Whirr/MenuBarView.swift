@@ -163,6 +163,28 @@ struct MenuBarView: View {
                 }
             }
 
+            if !monitor.dockerContainers.isEmpty {
+                Text("Docker containers")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 6)
+                ForEach(monitor.dockerContainers) { container in
+                    HStack(spacing: 8) {
+                        Text(container.name)
+                            .font(.callout)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text(String(format: "%.0f%%", container.cpuPercent))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                        Text(Self.formatBytes(container.memoryBytes))
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             if !topIOProcesses.isEmpty {
                 Text("Top by disk I/O")
                     .font(.caption)

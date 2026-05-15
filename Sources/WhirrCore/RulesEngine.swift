@@ -5,11 +5,16 @@ import Foundation
 public struct RulesEngine: Sendable {
     public init() {}
 
-    public func evaluate(snapshot: SystemSnapshot, processes: [ProcessSample]) -> [Diagnosis] {
+    public func evaluate(
+        snapshot: SystemSnapshot,
+        processes: [ProcessSample],
+        dockerContainers: [DockerContainer] = []
+    ) -> [Diagnosis] {
         let core = CoreContext(
             snapshot: snapshot,
             processes: processes,
-            coreCount: ProcessInfo.processInfo.activeProcessorCount
+            coreCount: ProcessInfo.processInfo.activeProcessorCount,
+            dockerContainers: dockerContainers
         )
 
         var standalone: [Diagnosis] = []
@@ -63,10 +68,23 @@ private func formatBytes(_ bytes: UInt64) -> String {
     return String(format: "%.0f MB", mb)
 }
 
-struct CoreContext {
-    let snapshot: SystemSnapshot
-    let processes: [ProcessSample]
-    let coreCount: Int
+public struct CoreContext {
+    public let snapshot: SystemSnapshot
+    public let processes: [ProcessSample]
+    public let coreCount: Int
+    public let dockerContainers: [DockerContainer]
+
+    public init(
+        snapshot: SystemSnapshot,
+        processes: [ProcessSample],
+        coreCount: Int,
+        dockerContainers: [DockerContainer] = []
+    ) {
+        self.snapshot = snapshot
+        self.processes = processes
+        self.coreCount = coreCount
+        self.dockerContainers = dockerContainers
+    }
 
     var topProcess: ProcessSample? { processes.first }
 
@@ -488,13 +506,31 @@ struct DockerStrainNarrative: NarrativeRule {
         }
 
         let severity: Severity = memoryGB >= Self.memoryCritGB ? .critical : .warning
-        let processCount = dockerProcs.count
+
+        // If we have per-container stats from the Docker socket, name the
+        // heaviest container directly instead of telling the user to run
+        // `docker stats` themselves.
+        let detail: String
+        if let worstContainer = ctx.dockerContainers.max(by: { $0.memoryBytes < $1.memoryBytes }) {
+            let containerGB = Double(worstContainer.memoryBytes) / 1_073_741_824
+            let containerMB = Double(worstContainer.memoryBytes) / 1_048_576
+            let containerSize = containerGB >= 1.0
+                ? String(format: "%.1f GB", containerGB)
+                : String(format: "%.0f MB", containerMB)
+            detail = String(
+                format: "Docker is using %.1f GB and %.0f%% CPU across %d helper/VM processes. Heaviest container inside the VM: %@ at %@.",
+                memoryGB, totalCPU, dockerProcs.count, worstContainer.name, containerSize
+            )
+        } else {
+            detail = String(
+                format: "Docker is using %.1f GB and %.0f%% CPU across %d helper/VM processes. Per-container detail isn't visible from the host — run `docker stats` to see which container is responsible.",
+                memoryGB, totalCPU, dockerProcs.count
+            )
+        }
+
         return Diagnosis(
             title: "Docker is using significant resources",
-            detail: String(
-                format: "Docker is using %.1f GB and %.0f%% CPU across %d helper/VM processes. Per-container detail isn't visible from the host — run `docker stats` to see which container is responsible.",
-                memoryGB, totalCPU, processCount
-            ),
+            detail: detail,
             severity: severity,
             culprits: dockerProcs.map(\.name),
             kind: .narrative

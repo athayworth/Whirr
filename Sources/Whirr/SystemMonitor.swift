@@ -13,10 +13,14 @@ final class SystemMonitor {
     /// Recent history written by the daemon (empty when daemon isn't installed).
     /// Newest points last.
     var trendHistory: [TrendPoint] = []
+    /// Per-container stats from Docker's Unix socket. Empty when Docker isn't
+    /// running or the socket isn't reachable.
+    var dockerContainers: [DockerContainer] = []
 
     private let pipeline = SamplingPipeline()
     private let taskBox = TaskBox()
     private let notifications = NotificationService()
+    private let dockerClient = DockerClient()
     /// In-memory rolling history maintained by the menu bar app itself.
     /// When the daemon writes history.json that's preferred (it persists
     /// across app restarts and reaches back further); otherwise we fall
@@ -46,14 +50,29 @@ final class SystemMonitor {
 
     private func start() {
         let pipeline = self.pipeline
+        let dockerClient = self.dockerClient
         taskBox.task = Task { [weak self] in
             // Prime the per-process CPU sampler so the next sample produces real deltas.
             _ = await pipeline.tick()
             try? await Task.sleep(for: .seconds(2))
 
+            var tickCount = 0
             while !Task.isCancelled {
                 let result = await pipeline.tick()
-                await MainActor.run { self?.apply(result) }
+                // Poll Docker every other tick (~6 s) — its API is comparatively
+                // slow per request and per-container stats don't change minute
+                // to minute. Lets sampling stay snappy when Docker is busy.
+                let containers: [DockerContainer]?
+                if tickCount % 2 == 0 {
+                    containers = await dockerClient.listContainers()
+                } else {
+                    containers = nil
+                }
+                await MainActor.run {
+                    self?.apply(result)
+                    if let containers { self?.dockerContainers = containers }
+                }
+                tickCount += 1
                 try? await Task.sleep(for: .seconds(3))
             }
         }
