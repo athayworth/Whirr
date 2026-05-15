@@ -12,6 +12,11 @@ struct MenuBarView: View {
 
             diagnosesSection
 
+            if !monitor.trendHistory.isEmpty {
+                Divider()
+                historySection
+            }
+
             Divider()
 
             topProcessesSection
@@ -34,6 +39,56 @@ struct MenuBarView: View {
                 .font(.caption)
                 .foregroundStyle(statusColor)
         }
+    }
+
+    private var historyBuckets: [HistoryBucket] {
+        HistoryBucket.bucket(monitor.trendHistory, bucketCount: 30, bucketSize: 60, endingAt: Date())
+    }
+
+    @ViewBuilder
+    private var historySection: some View {
+        let buckets = historyBuckets
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Last 30 minutes")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(historySummary(buckets))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            HStack(spacing: 1) {
+                ForEach(buckets) { bucket in
+                    Rectangle()
+                        .fill(historyColor(for: bucket.severity))
+                        .frame(height: 10)
+                }
+            }
+        }
+    }
+
+    private func historyColor(for severity: Severity?) -> Color {
+        guard let severity else { return Color.gray.opacity(0.15) }
+        switch severity {
+        case .ok:       return .green.opacity(0.6)
+        case .warning:  return .yellow
+        case .critical: return .red
+        }
+    }
+
+    private func historySummary(_ buckets: [HistoryBucket]) -> String {
+        let withData = buckets.filter { $0.severity != nil }
+        guard !withData.isEmpty else { return "" }
+        let criticalCount = withData.filter { $0.severity == .critical }.count
+        if criticalCount > 0 {
+            return "critical for \(criticalCount) of last \(withData.count) min"
+        }
+        let warningCount = withData.filter { $0.severity == .warning }.count
+        if warningCount > 0 {
+            return "warning for \(warningCount) of last \(withData.count) min"
+        }
+        return "healthy"
     }
 
     @ViewBuilder
@@ -89,6 +144,25 @@ struct MenuBarView: View {
                 }
             }
 
+            if !monitor.topMemoryProcesses.isEmpty {
+                Text("Top by memory")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 6)
+                ForEach(monitor.topMemoryProcesses) { proc in
+                    HStack(spacing: 8) {
+                        Text(proc.name)
+                            .font(.callout)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text(Self.formatBytes(proc.memoryBytes))
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             if !topIOProcesses.isEmpty {
                 Text("Top by disk I/O")
                     .font(.caption)
@@ -127,6 +201,13 @@ struct MenuBarView: View {
         let mb = Double(bytesPerSec) / 1_048_576
         if mb >= 10 { return String(format: "%.0f MB/s", mb) }
         return String(format: "%.1f MB/s", mb)
+    }
+
+    private static func formatBytes(_ bytes: UInt64) -> String {
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
+        let mb = Double(bytes) / 1_048_576
+        return String(format: "%.0f MB", mb)
     }
 
     private var footer: some View {

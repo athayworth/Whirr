@@ -47,7 +47,8 @@ public struct RulesEngine: Sendable {
         ThermalThrottleAmplifierNarrative(),
         DiskMemoryContentionNarrative(),
         WindowServerHogNarrative(),
-        SpotlightReindexNarrative()
+        SpotlightReindexNarrative(),
+        DockerStrainNarrative()
     ]
 }
 
@@ -447,6 +448,69 @@ struct WindowServerHogNarrative: NarrativeRule {
             culprits: ["WindowServer"],
             kind: .narrative
         )
+    }
+}
+
+/// Docker Desktop on macOS runs all containers inside a Linux VM (via
+/// Apple's Virtualization framework). From the host's perspective the
+/// entire fleet of containers shows up as a single Virtualization process
+/// plus Docker's helper backends — you can see Docker is using resources,
+/// but not WHICH container. The right next step is `docker stats`.
+///
+/// We detect Docker by the presence of `com.docker.backend` (Docker
+/// Desktop's control plane). When that's present, we sum any other
+/// processes that look like Docker: other com.docker.* binaries and any
+/// Virtualization framework process (Docker's VM uses it).
+///
+/// On a machine where the user runs *only* Parallels/UTM and not Docker,
+/// this rule stays quiet because `com.docker.backend` won't be running.
+struct DockerStrainNarrative: NarrativeRule {
+    private static let memoryWarnGB: Double = 4.0
+    private static let memoryCritGB: Double = 8.0
+    private static let cpuWarnPercent: Double = 50.0
+
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        guard ctx.processes.contains(where: { $0.name.hasPrefix("com.docker.") }) else {
+            return nil
+        }
+        let dockerProcs = ctx.processes.filter { isDocker($0) }
+        guard !dockerProcs.isEmpty else { return nil }
+
+        let totalMemory = dockerProcs.reduce(UInt64(0)) { $0 &+ $1.memoryBytes }
+        let totalCPU = dockerProcs.reduce(0.0) { $0 + $1.cpuPercent }
+        let memoryGB = Double(totalMemory) / 1_073_741_824
+
+        // Only surface a narrative when Docker is actually noticeable —
+        // an idle Docker Desktop with no containers running might still
+        // hold ~1 GB; don't pester about that.
+        guard memoryGB >= Self.memoryWarnGB || totalCPU >= Self.cpuWarnPercent else {
+            return nil
+        }
+
+        let severity: Severity = memoryGB >= Self.memoryCritGB ? .critical : .warning
+        let processCount = dockerProcs.count
+        return Diagnosis(
+            title: "Docker is using significant resources",
+            detail: String(
+                format: "Docker is using %.1f GB and %.0f%% CPU across %d helper/VM processes. Per-container detail isn't visible from the host — run `docker stats` to see which container is responsible.",
+                memoryGB, totalCPU, processCount
+            ),
+            severity: severity,
+            culprits: dockerProcs.map(\.name),
+            kind: .narrative
+        )
+    }
+
+    private func isDocker(_ proc: ProcessSample) -> Bool {
+        if proc.name.hasPrefix("com.docker.") { return true }
+        // Virtualization framework processes are Docker's VM when Docker
+        // is also running. False positive risk: someone using Parallels +
+        // Docker would see Parallels VMs attributed to Docker too. For now
+        // accept that tradeoff — most users running Docker aren't also
+        // running Parallels.
+        if proc.name.contains("Virtualization") { return true }
+        if let cmd = proc.commandLine, cmd.contains("Virtualization.framework") { return true }
+        return false
     }
 }
 

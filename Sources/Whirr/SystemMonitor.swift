@@ -7,12 +7,22 @@ import WhirrCore
 final class SystemMonitor {
     var diagnoses: [Diagnosis] = []
     var topProcesses: [ProcessSample] = []
+    var topMemoryProcesses: [ProcessSample] = []
     var systemSnapshot: SystemSnapshot = .empty
     var lastUpdated: Date = .distantPast
+    /// Recent history written by the daemon (empty when daemon isn't installed).
+    /// Newest points last.
+    var trendHistory: [TrendPoint] = []
 
     private let pipeline = SamplingPipeline()
     private let taskBox = TaskBox()
     private let notifications = NotificationService()
+    /// In-memory rolling history maintained by the menu bar app itself.
+    /// When the daemon writes history.json that's preferred (it persists
+    /// across app restarts and reaches back further); otherwise we fall
+    /// back to this buffer so the history view works without the daemon.
+    private var inMemoryHistory: [TrendPoint] = []
+    private static let inMemoryHistoryCapacity = 600  // ~30 min at 3 s
 
     init() {
         start()
@@ -52,7 +62,37 @@ final class SystemMonitor {
     private func apply(_ result: SamplingPipeline.Result) {
         self.systemSnapshot = result.snapshot
         self.topProcesses = Array(result.processes.prefix(8))
+        // Sort by memory and take the top 5 with >= 500 MB so we don't fill
+        // the menu with idle background processes that happen to hold 100 MB.
+        self.topMemoryProcesses = result.processes
+            .sorted { $0.memoryBytes > $1.memoryBytes }
+            .prefix(5)
+            .filter { $0.memoryBytes >= 500 * 1_048_576 }
         self.diagnoses = result.diagnoses
+
+        // Always append the current tick to in-memory history. This works
+        // regardless of daemon state and gives the history strip something
+        // to show on a fresh install before the daemon's file gets used.
+        let worst = result.diagnoses.map(\.severity).max() ?? .ok
+        inMemoryHistory.append(TrendPoint(
+            capturedAt: Date(),
+            memoryPressure: result.snapshot.memoryPressure,
+            memoryUsedBytes: result.snapshot.memoryUsedBytes,
+            swapUsedBytes: result.snapshot.swapUsedBytes,
+            loadOneMinute: result.snapshot.loadAverage.oneMinute,
+            worstSeverity: worst
+        ))
+        if inMemoryHistory.count > Self.inMemoryHistoryCapacity {
+            inMemoryHistory.removeFirst(inMemoryHistory.count - Self.inMemoryHistoryCapacity)
+        }
+
+        // Prefer the daemon's history when it has more points than our
+        // in-memory buffer — daemon persists across app restarts, in-memory
+        // doesn't, so the daemon's version reaches further back.
+        self.trendHistory = result.history.count > inMemoryHistory.count
+            ? result.history
+            : inMemoryHistory
+
         self.lastUpdated = Date()
         notifications.process(result.diagnoses)
     }
@@ -63,6 +103,7 @@ actor SamplingPipeline {
         let snapshot: SystemSnapshot
         let processes: [ProcessSample]
         let diagnoses: [Diagnosis]
+        let history: [TrendPoint]
         let source: Source
 
         enum Source: Sendable { case daemon, inProcess }
@@ -72,6 +113,7 @@ actor SamplingPipeline {
     /// If this file exists and is fresh, we use it (covers root processes);
     /// otherwise we fall back to in-process sampling (works without the daemon).
     private static let daemonSnapshotPath = "/Library/Application Support/Whirr/snapshot.json"
+    private static let daemonHistoryPath = "/Library/Application Support/Whirr/history.json"
 
     /// How stale the daemon's file can be before we treat it as gone.
     /// Tied to the daemon's 3-second interval with comfortable slack.
@@ -92,7 +134,16 @@ actor SamplingPipeline {
         let snapshot = SystemSampler.sample()
         let processes = processSampler.sample()
         let diagnoses = rules.evaluate(snapshot: snapshot, processes: processes)
-        return Result(snapshot: snapshot, processes: processes, diagnoses: diagnoses, source: .inProcess)
+        // No daemon means no shared history file — return what we have
+        // (just the current point isn't useful, so an empty array signals
+        // "history not available" to the UI).
+        return Result(
+            snapshot: snapshot,
+            processes: processes,
+            diagnoses: diagnoses,
+            history: [],
+            source: .inProcess
+        )
     }
 
     private func readDaemonSnapshot() -> Result? {
@@ -110,8 +161,19 @@ actor SamplingPipeline {
             snapshot: payload.snapshot,
             processes: payload.processes,
             diagnoses: diagnoses,
+            history: readDaemonHistory(),
             source: .daemon
         )
+    }
+
+    private func readDaemonHistory() -> [TrendPoint] {
+        let url = URL(fileURLWithPath: Self.daemonHistoryPath)
+        guard let data = try? Data(contentsOf: url, options: .uncached) else { return [] }
+        guard let history = try? decoder.decode(TrendHistory.self, from: data),
+              history.formatVersion == TrendHistory.currentFormatVersion else {
+            return []
+        }
+        return history.points
     }
 }
 

@@ -492,6 +492,58 @@ final class RulesEngineTests: XCTestCase {
         )
         XCTAssertNil(result.first { $0.title == "Spotlight is reindexing" })
     }
+
+    // MARK: - DockerStrainNarrative
+
+    func testDockerNarrativeFiresWhenDockerHeavy() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [
+                process(pid: 1, name: "com.docker.backend", mem: 1 * .gb),
+                process(pid: 2, name: "com.apple.Virtualization.Virtua", mem: 7 * .gb)
+            ]
+        )
+        let narrative = result.first { $0.title == "Docker is using significant resources" }
+        XCTAssertNotNil(narrative)
+        XCTAssertTrue(narrative?.detail.contains("docker stats") ?? false,
+                      "Detail should suggest `docker stats`")
+    }
+
+    func testDockerNarrativeCriticalAt8GB() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [
+                process(pid: 1, name: "com.docker.backend", mem: 2 * .gb),
+                process(pid: 2, name: "com.apple.Virtualization.Virtua", mem: 8 * .gb)
+            ]
+        )
+        let narrative = result.first { $0.title == "Docker is using significant resources" }
+        XCTAssertEqual(narrative?.severity, .critical)
+    }
+
+    func testDockerNarrativeStaysQuietWhenDockerIdle() {
+        // Docker Desktop running but not doing much — don't pester.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [
+                process(pid: 1, name: "com.docker.backend", mem: 800 * .mb),
+                process(pid: 2, name: "com.apple.Virtualization.Virtua", mem: 1 * .gb)
+            ]
+        )
+        XCTAssertNil(result.first { $0.title == "Docker is using significant resources" })
+    }
+
+    func testDockerNarrativeRequiresDockerBackendPresent() {
+        // Virtualization framework alone (Parallels, UTM, or some other VM
+        // user) — we don't attribute that to Docker.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [
+                process(pid: 1, name: "com.apple.Virtualization.Virtua", mem: 8 * .gb)
+            ]
+        )
+        XCTAssertNil(result.first { $0.title == "Docker is using significant resources" })
+    }
 }
 
 private extension UInt64 {

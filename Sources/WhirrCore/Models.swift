@@ -160,6 +160,49 @@ public enum ThermalState: Int, Sendable, Codable {
     }
 }
 
+/// One point in the rolling history that the daemon maintains for the
+/// "what's been happening lately" view. Intentionally light — we keep
+/// system-level signals only, not per-process state, because per-process
+/// would blow up the history file size at the sampling rate we want.
+public struct TrendPoint: Codable, Sendable, Hashable {
+    public let capturedAt: Date
+    public let memoryPressure: MemoryPressure
+    public let memoryUsedBytes: UInt64
+    public let swapUsedBytes: UInt64
+    public let loadOneMinute: Double
+    public let worstSeverity: Severity
+
+    public init(
+        capturedAt: Date,
+        memoryPressure: MemoryPressure,
+        memoryUsedBytes: UInt64,
+        swapUsedBytes: UInt64,
+        loadOneMinute: Double,
+        worstSeverity: Severity
+    ) {
+        self.capturedAt = capturedAt
+        self.memoryPressure = memoryPressure
+        self.memoryUsedBytes = memoryUsedBytes
+        self.swapUsedBytes = swapUsedBytes
+        self.loadOneMinute = loadOneMinute
+        self.worstSeverity = worstSeverity
+    }
+}
+
+/// Rolling history of recent samples, persisted alongside the snapshot
+/// when the daemon is installed. Newest points last.
+public struct TrendHistory: Codable, Sendable {
+    public static let currentFormatVersion = 1
+
+    public let formatVersion: Int
+    public let points: [TrendPoint]
+
+    public init(points: [TrendPoint]) {
+        self.formatVersion = Self.currentFormatVersion
+        self.points = points
+    }
+}
+
 /// Wire format written by `whirr-sampler` and consumed by the menu bar app.
 /// `formatVersion` is incremented on breaking schema changes; readers that
 /// see an unknown version should fall back to in-process sampling rather

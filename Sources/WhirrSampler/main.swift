@@ -7,6 +7,12 @@ import WhirrCore
 /// before any write happens, so a misconfigured launchd plist or a stray
 /// command-line override can't redirect output to an arbitrary location.
 private let defaultOutputPath = "/Library/Application Support/Whirr/snapshot.json"
+private let defaultHistoryPath = "/Library/Application Support/Whirr/history.json"
+
+/// History capacity. At 3 s sampling cadence, 600 points = 30 minutes.
+/// Keep this bounded — the file is rewritten every tick and the menu bar
+/// reads it every tick, so size matters.
+private let historyMaxPoints = 600
 
 /// Output paths must live under this prefix. Refusing other paths means
 /// `whirr-sampler --output /etc/passwd` can't be coerced into overwriting
@@ -110,6 +116,39 @@ func write(_ payload: SnapshotPayload, to path: String) throws {
     try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
 }
 
+func write(_ history: TrendHistory, to path: String) throws {
+    let data = try jsonEncoder.encode(history)
+    let url = URL(fileURLWithPath: path)
+    let dir = url.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try data.write(to: url, options: [.atomic])
+    try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+}
+
+func loadHistoryOrEmpty(from path: String) -> [TrendPoint] {
+    let url = URL(fileURLWithPath: path)
+    guard let data = try? Data(contentsOf: url) else { return [] }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    guard let history = try? decoder.decode(TrendHistory.self, from: data),
+          history.formatVersion == TrendHistory.currentFormatVersion else {
+        return []
+    }
+    return history.points
+}
+
+func trendPoint(from payload: SnapshotPayload) -> TrendPoint {
+    let worst = payload.diagnoses.map(\.severity).max() ?? .ok
+    return TrendPoint(
+        capturedAt: payload.capturedAt,
+        memoryPressure: payload.snapshot.memoryPressure,
+        memoryUsedBytes: payload.snapshot.memoryUsedBytes,
+        swapUsedBytes: payload.snapshot.swapUsedBytes,
+        loadOneMinute: payload.snapshot.loadAverage.oneMinute,
+        worstSeverity: worst
+    )
+}
+
 // MARK: - Main
 
 let args = CommandLine.arguments
@@ -161,6 +200,12 @@ log("Running as uid=\(getuid()) euid=\(geteuid())")
 // CPU% values rather than all zeros.
 _ = takeSnapshot()
 
+// Recover any history the daemon previously wrote — gives the menu bar
+// a populated timeline immediately after the daemon (or whole machine)
+// has been restarted, instead of needing 30 minutes to fill back up.
+var historyPoints = loadHistoryOrEmpty(from: defaultHistoryPath)
+log("Loaded \(historyPoints.count) history points from prior run")
+
 // Signal handling: log and exit cleanly. launchd will restart us per the
 // plist's KeepAlive policy, but a clean exit means our log line lands first.
 signal(SIGTERM) { _ in
@@ -175,8 +220,15 @@ signal(SIGINT) { _ in
 while true {
     Thread.sleep(forTimeInterval: opts.intervalSeconds)
     let payload = takeSnapshot()
+
+    historyPoints.append(trendPoint(from: payload))
+    if historyPoints.count > historyMaxPoints {
+        historyPoints.removeFirst(historyPoints.count - historyMaxPoints)
+    }
+
     do {
         try write(payload, to: opts.outputPath)
+        try write(TrendHistory(points: historyPoints), to: defaultHistoryPath)
     } catch {
         log("Write failed: \(error)")
         // Don't exit — transient errors (disk full, perm flap) shouldn't
