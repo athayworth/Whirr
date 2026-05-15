@@ -54,6 +54,7 @@ public struct RulesEngine: Sendable {
         WindowServerHogNarrative(),
         SpotlightReindexNarrative(),
         DockerStrainNarrative(),
+        MemoryLeakNarrative(),
         IdleMemoryHogsNarrative()
     ]
 }
@@ -590,6 +591,56 @@ struct SpotlightReindexNarrative: NarrativeRule {
             detail: detail,
             severity: .warning,
             culprits: active.map(\.name),
+            kind: .narrative
+        )
+    }
+}
+
+/// Detects the leak pattern: a single process's memory has grown
+/// substantially over the last ~10 minutes. Distinct from "this process
+/// is big" (already covered by Top by memory and MemorySwapSpiral) —
+/// the signal here is the *trajectory*. A process that's been at 5 GB
+/// for an hour is annoying but probably what it does. A process that
+/// has gone from 5 GB to 7 GB in 10 minutes is almost certainly leaking.
+///
+/// Restarting the process is the right action and what the diagnosis
+/// suggests. We don't fire below a 1 GB current footprint — small
+/// processes growing don't warrant a card.
+struct MemoryLeakNarrative: NarrativeRule {
+    /// Minimum growth over 10 min to fire the rule.
+    static let growthThresholdBytes: Int64 = 500 * 1_048_576
+    /// Minimum current memory size to be worth flagging.
+    static let memoryFloorBytes: UInt64 = 1_073_741_824
+    /// Growth threshold for promoting from warning to critical.
+    static let criticalGrowthThresholdBytes: Int64 = 2 * 1_073_741_824
+
+    func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        let leakers = ctx.processes
+            .compactMap { proc -> (proc: ProcessSample, delta: Int64)? in
+                guard let delta = proc.memoryDelta10MinBytes,
+                      delta >= Self.growthThresholdBytes,
+                      proc.memoryBytes >= Self.memoryFloorBytes
+                else { return nil }
+                return (proc, delta)
+            }
+            .sorted { $0.delta > $1.delta }
+        guard let worst = leakers.first else { return nil }
+
+        let currentBytes = worst.proc.memoryBytes
+        let formerBytes = max(Int64(0), Int64(currentBytes) - worst.delta)
+        let currentGB = Double(currentBytes) / 1_073_741_824
+        let formerGB = Double(formerBytes) / 1_073_741_824
+        let deltaGB = Double(worst.delta) / 1_073_741_824
+
+        let severity: Severity = worst.delta >= Self.criticalGrowthThresholdBytes ? .critical : .warning
+        return Diagnosis(
+            title: "\(worst.proc.name) memory has been growing",
+            detail: String(
+                format: "%@ went from %.1f GB to %.1f GB (+%.1f GB) in the last 10 minutes. This is the leak pattern — restarting it would recover that memory.",
+                worst.proc.name, formerGB, currentGB, deltaGB
+            ),
+            severity: severity,
+            culprits: [worst.proc.name],
             kind: .narrative
         )
     }

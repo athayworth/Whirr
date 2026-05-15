@@ -33,7 +33,8 @@ final class RulesEngineTests: XCTestCase {
         writeBps: UInt64 = 0,
         commandLine: String? = nil,
         sustained: Int = 0,
-        idle: Int = 0
+        idle: Int = 0,
+        memDelta: Int64? = nil
     ) -> ProcessSample {
         ProcessSample(
             pid: pid,
@@ -44,7 +45,8 @@ final class RulesEngineTests: XCTestCase {
             diskWriteBytesPerSec: writeBps,
             commandLine: commandLine,
             sustainedHighCpuSamples: sustained,
-            sustainedIdleSamples: idle
+            sustainedIdleSamples: idle,
+            memoryDelta10MinBytes: memDelta
         )
     }
 
@@ -593,6 +595,76 @@ final class RulesEngineTests: XCTestCase {
             ]
         )
         XCTAssertNil(result.first { $0.title == "Big processes that look unused" })
+    }
+
+    // MARK: - MemoryLeakNarrative
+
+    func testMemoryLeakFiresOnSignificantGrowth() {
+        // A 5 GB process that grew by 1.5 GB over 10 minutes.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(
+                pid: 1, name: "bzserv",
+                mem: 5 * .gb + 500 * .mb,
+                memDelta: Int64(1.5 * Double(UInt64.gb))
+            )]
+        )
+        let narrative = result.first { $0.title.contains("bzserv") && $0.title.contains("growing") }
+        XCTAssertNotNil(narrative)
+        XCTAssertEqual(narrative?.severity, .warning)
+        XCTAssertTrue(narrative?.detail.contains("10 minutes") ?? false)
+    }
+
+    func testMemoryLeakCriticalAtTwoGigGrowth() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(
+                pid: 1, name: "node",
+                mem: 6 * .gb,
+                memDelta: Int64(3 * UInt64.gb)
+            )]
+        )
+        let narrative = result.first { $0.title.contains("growing") }
+        XCTAssertEqual(narrative?.severity, .critical)
+    }
+
+    func testMemoryLeakIgnoresProcessesBelowFloor() {
+        // 600 MB process growing 500 MB — below the 1 GB current-size floor.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(
+                pid: 1, name: "small",
+                mem: 600 * .mb,
+                memDelta: Int64(500 * UInt64.mb)
+            )]
+        )
+        XCTAssertNil(result.first { $0.title.contains("growing") })
+    }
+
+    func testMemoryLeakIgnoresShrinkingProcesses() {
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(
+                pid: 1, name: "bzserv",
+                mem: 3 * .gb,
+                memDelta: -Int64(2 * UInt64.gb)  // Lost 2 GB — good news, not a leak
+            )]
+        )
+        XCTAssertNil(result.first { $0.title.contains("growing") })
+    }
+
+    func testMemoryLeakRequiresHistory() {
+        // memDelta nil = sampler doesn't have enough history yet (process
+        // only just became visible, or sampler just started).
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(
+                pid: 1, name: "node",
+                mem: 5 * .gb,
+                memDelta: nil
+            )]
+        )
+        XCTAssertNil(result.first { $0.title.contains("growing") })
     }
 
     func testIdleMemoryHogsRequiresSustainedIdleness() {

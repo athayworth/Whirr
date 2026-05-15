@@ -43,6 +43,13 @@ public final class ProcessSampler {
     /// approach.
     private var sustainedHighCounts: [Int32: Int] = [:]
     private var sustainedIdleCounts: [Int32: Int] = [:]
+    /// Per-pid rolling memory history. We only need the oldest entry within
+    /// the window, but keeping a small ring buffer is simpler than tracking
+    /// just one timestamped baseline; at ~200 samples × 8 bytes × 1000 pids
+    /// the overhead is ~1.6 MB which is fine for the menu bar app.
+    private var memoryHistory: [Int32: [UInt64]] = [:]
+    /// 200 samples × 3 s = 10 minutes of memory history per process.
+    private static let memoryHistoryCapacity = 200
     /// Cached command lines. We use `[Int32: String?]` so a failed read
     /// (e.g. other-user process when we're not root) is remembered as
     /// nil rather than retried every sample — that would otherwise burn
@@ -90,6 +97,7 @@ public final class ProcessSampler {
                 }
 
                 updateSustainedCounters(pid: pid, cpuPercent: cpuPercent)
+                let memoryDelta = recordAndComputeMemoryDelta(pid: pid, currentBytes: timing.residentBytes)
 
                 samples.append(ProcessSample(
                     pid: pid,
@@ -100,7 +108,8 @@ public final class ProcessSampler {
                     diskWriteBytesPerSec: diskWritePerSec,
                     commandLine: commandLine(forPID: pid),
                     sustainedHighCpuSamples: sustainedHighCounts[pid] ?? 0,
-                    sustainedIdleSamples: sustainedIdleCounts[pid] ?? 0
+                    sustainedIdleSamples: sustainedIdleCounts[pid] ?? 0,
+                    memoryDelta10MinBytes: memoryDelta
                 ))
             }
         }
@@ -112,9 +121,25 @@ public final class ProcessSampler {
         let currentPidSet = Set(current.keys)
         sustainedHighCounts = sustainedHighCounts.filter { currentPidSet.contains($0.key) }
         sustainedIdleCounts = sustainedIdleCounts.filter { currentPidSet.contains($0.key) }
+        memoryHistory = memoryHistory.filter { currentPidSet.contains($0.key) }
         commandLineCache = commandLineCache.filter { currentPidSet.contains($0.key) }
 
         return samples.sorted { $0.cpuPercent > $1.cpuPercent }
+    }
+
+    private func recordAndComputeMemoryDelta(pid: Int32, currentBytes: UInt64) -> Int64? {
+        var history = memoryHistory[pid, default: []]
+        history.append(currentBytes)
+        if history.count > Self.memoryHistoryCapacity {
+            history.removeFirst(history.count - Self.memoryHistoryCapacity)
+        }
+        memoryHistory[pid] = history
+        // Only return a delta once we have a full 10-minute window. Earlier
+        // values would conflate "process just started" with "no growth."
+        guard history.count == Self.memoryHistoryCapacity, let oldest = history.first else {
+            return nil
+        }
+        return Int64(currentBytes) - Int64(oldest)
     }
 
     private func updateSustainedCounters(pid: Int32, cpuPercent: Double) {

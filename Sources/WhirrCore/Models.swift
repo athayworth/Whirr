@@ -64,6 +64,11 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
     /// (dev servers you left running, IDEs you forgot about) that the user
     /// might want to close to recover RAM.
     public let sustainedIdleSamples: Int
+    /// Memory change over ~10 minutes (current minus value 10 min ago).
+    /// Positive = growing (possible leak), negative = shrinking, nil =
+    /// not enough history yet (process younger than 10 min from the
+    /// sampler's perspective, or sampler just started).
+    public let memoryDelta10MinBytes: Int64?
 
     public init(
         pid: Int32,
@@ -74,7 +79,8 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
         diskWriteBytesPerSec: UInt64 = 0,
         commandLine: String? = nil,
         sustainedHighCpuSamples: Int = 0,
-        sustainedIdleSamples: Int = 0
+        sustainedIdleSamples: Int = 0,
+        memoryDelta10MinBytes: Int64? = nil
     ) {
         self.pid = pid
         self.name = name
@@ -85,6 +91,7 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
         self.commandLine = commandLine
         self.sustainedHighCpuSamples = sustainedHighCpuSamples
         self.sustainedIdleSamples = sustainedIdleSamples
+        self.memoryDelta10MinBytes = memoryDelta10MinBytes
     }
 
     public var diskIOBytesPerSec: UInt64 {
