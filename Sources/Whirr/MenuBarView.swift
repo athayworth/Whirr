@@ -127,6 +127,7 @@ struct MenuBarView: View {
             } else {
                 ForEach(monitor.topProcesses) { proc in
                     HStack(spacing: 8) {
+                        SafetyBadge(safety: ProcessClassifier.classify(proc))
                         Text(proc.name)
                             .font(.callout)
                             .lineLimit(1)
@@ -151,6 +152,7 @@ struct MenuBarView: View {
                     .padding(.top, 6)
                 ForEach(monitor.topMemoryProcesses) { proc in
                     HStack(spacing: 8) {
+                        SafetyBadge(safety: ProcessClassifier.classify(proc))
                         Text(proc.name)
                             .font(.callout)
                             .lineLimit(1)
@@ -263,6 +265,43 @@ struct MenuBarView: View {
         case .ok:       return .green
         case .warning:  return .yellow
         case .critical: return .red
+        }
+    }
+}
+
+private struct SafetyBadge: View {
+    let safety: ProcessSafety
+
+    var body: some View {
+        Text(safety.label)
+            .font(.caption2.monospaced())
+            .foregroundStyle(textColor)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(tint.opacity(0.18), in: Capsule())
+            .help(safety.advice)
+            .frame(minWidth: 42, alignment: .center)
+    }
+
+    private var tint: Color {
+        switch safety {
+        case .systemCritical: return .red
+        case .systemService:  return .gray
+        case .userApp:        return .blue
+        case .helper:         return .purple
+        case .devTool:        return .green
+        case .unknown:        return .orange
+        }
+    }
+
+    private var textColor: Color {
+        switch safety {
+        case .systemCritical: return .red
+        case .systemService:  return .secondary
+        case .userApp:        return .blue
+        case .helper:         return .purple
+        case .devTool:        return .green
+        case .unknown:        return .orange
         }
     }
 }

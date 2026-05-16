@@ -43,7 +43,8 @@ public struct RulesEngine: Sendable {
         OverloadedSystemRule(),
         BackupHoggingRule(),
         HighDiskIORule(),
-        RunawayProcessRule()
+        RunawayProcessRule(),
+        LowDiskSpaceRule()
     ]
 
     private static let allNarratives: [any NarrativeRule] = [
@@ -270,6 +271,30 @@ struct HighDiskIORule: Rule {
             ),
             severity: worst.diskIOBytesPerSec >= Self.criticalThreshold ? .critical : .warning,
             culprits: heavy.prefix(3).map(\.name)
+        )
+    }
+}
+
+struct LowDiskSpaceRule: Rule {
+    /// macOS does several costly things as free space drops — APFS metadata
+    /// thrash, virtual memory eviction churn, Spotlight reindex deferral.
+    /// Above ~85% used everything starts to feel sluggish; above ~95% the
+    /// system actively struggles.
+    static let warningPercentUsed: Double = 85
+    static let criticalPercentUsed: Double = 95
+
+    func evaluate(_ ctx: CoreContext) -> Diagnosis? {
+        let percentUsed = ctx.snapshot.rootDiskPercentUsed
+        guard percentUsed >= Self.warningPercentUsed else { return nil }
+        let freeGB = Double(ctx.snapshot.rootDiskFreeBytes) / 1_073_741_824
+        let severity: Severity = percentUsed >= Self.criticalPercentUsed ? .critical : .warning
+        return Diagnosis(
+            title: "Disk is nearly full",
+            detail: String(
+                format: "Boot volume is %.0f%% full (%.1f GB free). macOS slows down as free space drops — clearing space speeds things up.",
+                percentUsed, freeGB
+            ),
+            severity: severity
         )
     }
 }

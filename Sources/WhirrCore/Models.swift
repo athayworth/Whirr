@@ -69,6 +69,16 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
     /// not enough history yet (process younger than 10 min from the
     /// sampler's perspective, or sampler just started).
     public let memoryDelta10MinBytes: Int64?
+    /// Full path to the executable. Used by the safety classifier to
+    /// distinguish system processes (under /System, /usr) from user apps
+    /// (under /Applications, ~/Library). Nil when we couldn't read it
+    /// (other-user process when not root).
+    public let executablePath: String?
+    /// Effective UID of the process. 0 = root. Nil when unreadable.
+    public let userId: UInt32?
+    /// Parent process ID. Useful for helper-process identification —
+    /// "Arc Helper" with parent "Arc" → kill the parent, not the helper.
+    public let parentPid: Int32?
 
     public init(
         pid: Int32,
@@ -80,7 +90,10 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
         commandLine: String? = nil,
         sustainedHighCpuSamples: Int = 0,
         sustainedIdleSamples: Int = 0,
-        memoryDelta10MinBytes: Int64? = nil
+        memoryDelta10MinBytes: Int64? = nil,
+        executablePath: String? = nil,
+        userId: UInt32? = nil,
+        parentPid: Int32? = nil
     ) {
         self.pid = pid
         self.name = name
@@ -92,6 +105,9 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
         self.sustainedHighCpuSamples = sustainedHighCpuSamples
         self.sustainedIdleSamples = sustainedIdleSamples
         self.memoryDelta10MinBytes = memoryDelta10MinBytes
+        self.executablePath = executablePath
+        self.userId = userId
+        self.parentPid = parentPid
     }
 
     public var diskIOBytesPerSec: UInt64 {
@@ -120,6 +136,11 @@ public struct SystemSnapshot: Sendable, Codable {
     public let swapUsedBytes: UInt64
     public let thermalState: ThermalState
     public let loadAverage: LoadAverage
+    /// Free bytes on the volume backing `/` (the boot volume). Low free
+    /// disk space is a real and common slowdown cause that doesn't show up
+    /// in memory/CPU stats. Defaults to 0 in the empty snapshot.
+    public let rootDiskFreeBytes: UInt64
+    public let rootDiskTotalBytes: UInt64
 
     public init(
         memoryUsedBytes: UInt64,
@@ -127,7 +148,9 @@ public struct SystemSnapshot: Sendable, Codable {
         memoryPressure: MemoryPressure,
         swapUsedBytes: UInt64,
         thermalState: ThermalState,
-        loadAverage: LoadAverage
+        loadAverage: LoadAverage,
+        rootDiskFreeBytes: UInt64 = 0,
+        rootDiskTotalBytes: UInt64 = 0
     ) {
         self.memoryUsedBytes = memoryUsedBytes
         self.memoryFreeBytes = memoryFreeBytes
@@ -135,6 +158,8 @@ public struct SystemSnapshot: Sendable, Codable {
         self.swapUsedBytes = swapUsedBytes
         self.thermalState = thermalState
         self.loadAverage = loadAverage
+        self.rootDiskFreeBytes = rootDiskFreeBytes
+        self.rootDiskTotalBytes = rootDiskTotalBytes
     }
 
     public static let empty = SystemSnapshot(
@@ -145,6 +170,12 @@ public struct SystemSnapshot: Sendable, Codable {
         thermalState: .nominal,
         loadAverage: .zero
     )
+
+    public var rootDiskPercentUsed: Double {
+        guard rootDiskTotalBytes > 0 else { return 0 }
+        let used = rootDiskTotalBytes &- rootDiskFreeBytes
+        return Double(used) / Double(rootDiskTotalBytes) * 100.0
+    }
 }
 
 public enum MemoryPressure: Int, Sendable, Codable {

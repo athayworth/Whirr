@@ -16,14 +16,26 @@ public enum SystemSampler {
         let usedBytes = activeBytes + wiredBytes + compressedBytes
         let availableBytes = freeBytes + inactiveBytes + speculativeBytes
 
+        let (rootFree, rootTotal) = rootDiskUsage()
         return SystemSnapshot(
             memoryUsedBytes: usedBytes,
             memoryFreeBytes: availableBytes,
             memoryPressure: classifyPressure(vm: vm),
             swapUsedBytes: swapUsedBytes(),
             thermalState: ThermalState(ProcessInfo.processInfo.thermalState),
-            loadAverage: currentLoadAverage()
+            loadAverage: currentLoadAverage(),
+            rootDiskFreeBytes: rootFree,
+            rootDiskTotalBytes: rootTotal
         )
+    }
+
+    private static func rootDiskUsage() -> (free: UInt64, total: UInt64) {
+        var stats = statfs()
+        guard "/".withCString({ statfs($0, &stats) }) == 0 else { return (0, 0) }
+        let blockSize = UInt64(stats.f_bsize)
+        let free = UInt64(stats.f_bavail) &* blockSize
+        let total = UInt64(stats.f_blocks) &* blockSize
+        return (free, total)
     }
 
     private static func vmStatistics() -> vm_statistics64_data_t {

@@ -24,6 +24,14 @@ public final class ProcessSampler {
         let name: String
     }
 
+    /// Identity info that doesn't change over a process's lifetime — path,
+    /// uid, ppid. Cached per pid so we don't re-read it every sample.
+    private struct Identity {
+        let executablePath: String?
+        let userId: UInt32?
+        let parentPid: Int32?
+    }
+
     /// A "high CPU sample" is one above this percentage. Single-core
     /// pegging registers as 100% on macOS, so this catches the runaway-
     /// dev-script case without flagging multi-threaded steady-state work
@@ -55,6 +63,9 @@ public final class ProcessSampler {
     /// nil rather than retried every sample — that would otherwise burn
     /// hundreds of sysctl calls per tick for no benefit.
     private var commandLineCache: [Int32: String?] = [:]
+    /// Cached executable path / uid / ppid. Same caching pattern — these
+    /// don't change over a pid's lifetime, so one read per pid suffices.
+    private var identityCache: [Int32: Identity] = [:]
     private let timebase: (numer: UInt32, denom: UInt32) = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
@@ -98,6 +109,7 @@ public final class ProcessSampler {
 
                 updateSustainedCounters(pid: pid, cpuPercent: cpuPercent)
                 let memoryDelta = recordAndComputeMemoryDelta(pid: pid, currentBytes: timing.residentBytes)
+                let identity = identity(forPID: pid)
 
                 samples.append(ProcessSample(
                     pid: pid,
@@ -109,7 +121,10 @@ public final class ProcessSampler {
                     commandLine: commandLine(forPID: pid),
                     sustainedHighCpuSamples: sustainedHighCounts[pid] ?? 0,
                     sustainedIdleSamples: sustainedIdleCounts[pid] ?? 0,
-                    memoryDelta10MinBytes: memoryDelta
+                    memoryDelta10MinBytes: memoryDelta,
+                    executablePath: identity.executablePath,
+                    userId: identity.userId,
+                    parentPid: identity.parentPid
                 ))
             }
         }
@@ -123,8 +138,36 @@ public final class ProcessSampler {
         sustainedIdleCounts = sustainedIdleCounts.filter { currentPidSet.contains($0.key) }
         memoryHistory = memoryHistory.filter { currentPidSet.contains($0.key) }
         commandLineCache = commandLineCache.filter { currentPidSet.contains($0.key) }
+        identityCache = identityCache.filter { currentPidSet.contains($0.key) }
 
         return samples.sorted { $0.cpuPercent > $1.cpuPercent }
+    }
+
+    private func identity(forPID pid: Int32) -> Identity {
+        if let cached = identityCache[pid] { return cached }
+        let path = readExecutablePath(pid: pid)
+        let (uid, ppid) = readBsdShortInfo(pid: pid)
+        let id = Identity(executablePath: path, userId: uid, parentPid: ppid)
+        identityCache[pid] = id
+        return id
+    }
+
+    private func readExecutablePath(pid: Int32) -> String? {
+        // PROC_PIDPATHINFO_MAXSIZE is 4*MAXPATHLEN = 4096.
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let written = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard written > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    private func readBsdShortInfo(pid: Int32) -> (uid: UInt32?, ppid: Int32?) {
+        var info = proc_bsdshortinfo()
+        let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
+        let written = withUnsafeMutablePointer(to: &info) { ptr in
+            proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, ptr, size)
+        }
+        guard written == size else { return (nil, nil) }
+        return (UInt32(info.pbsi_uid), Int32(info.pbsi_ppid))
     }
 
     private func recordAndComputeMemoryDelta(pid: Int32, currentBytes: UInt64) -> Int64? {

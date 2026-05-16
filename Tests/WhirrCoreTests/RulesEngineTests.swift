@@ -12,7 +12,9 @@ final class RulesEngineTests: XCTestCase {
         pressure: MemoryPressure = .normal,
         swap: UInt64 = 0,
         thermal: ThermalState = .nominal,
-        load: LoadAverage = LoadAverage(oneMinute: 1, fiveMinute: 1, fifteenMinute: 1)
+        load: LoadAverage = LoadAverage(oneMinute: 1, fiveMinute: 1, fifteenMinute: 1),
+        diskFree: UInt64 = 500 * .gb,
+        diskTotal: UInt64 = 1000 * .gb
     ) -> SystemSnapshot {
         SystemSnapshot(
             memoryUsedBytes: used,
@@ -20,7 +22,9 @@ final class RulesEngineTests: XCTestCase {
             memoryPressure: pressure,
             swapUsedBytes: swap,
             thermalState: thermal,
-            loadAverage: load
+            loadAverage: load,
+            rootDiskFreeBytes: diskFree,
+            rootDiskTotalBytes: diskTotal
         )
     }
 
@@ -209,6 +213,36 @@ final class RulesEngineTests: XCTestCase {
         let diag = result.first { $0.title == "Disk is busy" }
         XCTAssertTrue(diag?.detail.contains("heaviest") ?? false)
         XCTAssertEqual(diag?.culprits.first, "heaviest")
+    }
+
+    // MARK: - LowDiskSpaceRule
+
+    func testLowDiskSpaceFiresAt90PercentFull() {
+        // 90% used = 100 GB free of 1000 GB total.
+        let result = engine.evaluate(
+            snapshot: snapshot(diskFree: 100 * .gb, diskTotal: 1000 * .gb),
+            processes: []
+        )
+        let disk = result.first { $0.title == "Disk is nearly full" }
+        XCTAssertEqual(disk?.severity, .warning)
+        XCTAssertTrue(disk?.detail.contains("90%") ?? false)
+    }
+
+    func testLowDiskSpaceCriticalAt96PercentFull() {
+        let result = engine.evaluate(
+            snapshot: snapshot(diskFree: 40 * .gb, diskTotal: 1000 * .gb),
+            processes: []
+        )
+        let disk = result.first { $0.title == "Disk is nearly full" }
+        XCTAssertEqual(disk?.severity, .critical)
+    }
+
+    func testLowDiskSpaceDoesNotFireWhenPlentyFree() {
+        let result = engine.evaluate(
+            snapshot: snapshot(diskFree: 500 * .gb, diskTotal: 1000 * .gb),
+            processes: []
+        )
+        XCTAssertNil(result.first { $0.title == "Disk is nearly full" })
     }
 
     // MARK: - RunawayProcessRule
