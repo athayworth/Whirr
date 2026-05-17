@@ -3,6 +3,10 @@ import WhirrCore
 
 struct MenuBarView: View {
     let monitor: SystemMonitor
+    /// Pid of the row that's currently expanded (showing details + actions).
+    /// Nil = nothing expanded; only one at a time so the menu doesn't grow
+    /// unbounded.
+    @State private var expandedPid: Int32? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -126,21 +130,17 @@ struct MenuBarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 ForEach(monitor.topProcesses) { proc in
-                    HStack(spacing: 8) {
-                        SafetyBadge(safety: ProcessClassifier.classify(proc))
-                        Text(proc.name)
-                            .font(.callout)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        if proc.diskIOBytesPerSec >= ioBadgeThreshold {
-                            Text(Self.formatRate(proc.diskIOBytesPerSec))
-                                .font(.caption2.monospacedDigit())
-                                .foregroundStyle(.tertiary)
+                    ProcessRow(proc: proc, expandedPid: $expandedPid) {
+                        HStack(spacing: 8) {
+                            if proc.diskIOBytesPerSec >= ioBadgeThreshold {
+                                Text(Self.formatRate(proc.diskIOBytesPerSec))
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Text(String(format: "%.1f%%", proc.cpuPercent))
+                                .font(.callout.monospacedDigit())
+                                .foregroundStyle(.secondary)
                         }
-                        Text(String(format: "%.1f%%", proc.cpuPercent))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
                     }
                 }
             }
@@ -151,13 +151,7 @@ struct MenuBarView: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
                 ForEach(monitor.topMemoryProcesses) { proc in
-                    HStack(spacing: 8) {
-                        SafetyBadge(safety: ProcessClassifier.classify(proc))
-                        Text(proc.name)
-                            .font(.callout)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
+                    ProcessRow(proc: proc, expandedPid: $expandedPid) {
                         Text(Self.formatBytes(proc.memoryBytes))
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -266,6 +260,136 @@ struct MenuBarView: View {
         case .warning:  return .yellow
         case .critical: return .red
         }
+    }
+}
+
+/// A clickable process row. Renders compactly (safety pill + name +
+/// caller-supplied trailing content). Tapping it expands an inline
+/// detail panel underneath; tapping again collapses. Only one row
+/// across the whole menu can be expanded at a time (state lives at
+/// MenuBarView level).
+private struct ProcessRow<Trailing: View>: View {
+    let proc: ProcessSample
+    @Binding var expandedPid: Int32?
+    @ViewBuilder var trailing: () -> Trailing
+
+    private var isExpanded: Bool { expandedPid == proc.pid }
+    private var safety: ProcessSafety { ProcessClassifier.classify(proc) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                expandedPid = isExpanded ? nil : proc.pid
+            } label: {
+                HStack(spacing: 8) {
+                    SafetyBadge(safety: safety)
+                    Text(proc.name)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    trailing()
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                ProcessDetail(proc: proc, safety: safety)
+            }
+        }
+    }
+}
+
+private struct ProcessDetail: View {
+    let proc: ProcessSample
+    let safety: ProcessSafety
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(safety.advice)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                detailRow("pid", "\(proc.pid)")
+                if let ppid = proc.parentPid {
+                    detailRow("parent", "\(ppid)")
+                }
+                if let uid = proc.userId {
+                    detailRow("uid", uid == 0 ? "root" : "\(uid)")
+                }
+                if let path = proc.executablePath {
+                    detailRow("path", path)
+                }
+                if let cmd = proc.commandLine, cmd != proc.name, cmd != proc.executablePath {
+                    detailRow("command", cmd)
+                }
+            }
+
+            // Current resource use, plus growth indicator if memory is climbing.
+            HStack(spacing: 6) {
+                Text(String(format: "%.1f%% CPU", proc.cpuPercent))
+                Text("·")
+                Text(formatBytes(proc.memoryBytes))
+                if let delta = proc.memoryDelta10MinBytes, delta >= 100 * 1_048_576 {
+                    Text("·")
+                    Text("+\(formatBytes(UInt64(delta))) /10m")
+                        .foregroundStyle(.red)
+                }
+                if proc.sustainedIdleSamples >= 100 {
+                    Text("·")
+                    Text("idle \(proc.sustainedIdleSamples * 3 / 60)m")
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Button("Activity Monitor") {
+                    let url = URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app")
+                    NSWorkspace.shared.open(url)
+                }
+                .controlSize(.small)
+
+                if proc.userId == getuid() {
+                    Button("Quit") {
+                        _ = kill(proc.pid, SIGTERM)
+                    }
+                    .controlSize(.small)
+                    .help("Sends SIGTERM. The process should exit cleanly.")
+                }
+                Spacer()
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(label)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+                .frame(width: 52, alignment: .trailing)
+            Text(value)
+                .font(.caption2)
+                .textSelection(.enabled)
+                .lineLimit(3)
+                .truncationMode(.middle)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func formatBytes(_ bytes: UInt64) -> String {
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
+        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
     }
 }
 
