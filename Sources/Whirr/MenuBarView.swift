@@ -275,6 +275,13 @@ private struct DockerGroupView: View {
     @Binding var expandedContainer: String?
     let dockerClient: DockerClient
 
+    @State private var inFlight: String? = nil
+    @State private var lastError: String? = nil
+    @State private var pendingAction: GroupAction? = nil
+    @State private var showingConfirm: Bool = false
+
+    private enum GroupAction { case stop, restart }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             if let project = group.project {
@@ -289,11 +296,39 @@ private struct DockerGroupView: View {
                     Text("\(group.members.count)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let inFlight {
+                        Text(inFlight)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Text(formatBytes(group.totalMemoryBytes))
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.secondary)
+                    Menu {
+                        Button("Restart all (\(group.members.count) containers)") {
+                            pendingAction = .restart
+                            showingConfirm = true
+                        }
+                        Button("Stop all (\(group.members.count) containers)") {
+                            pendingAction = .stop
+                            showingConfirm = true
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.callout)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .disabled(inFlight != nil)
                 }
+            }
+            if let lastError {
+                Text(lastError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
             }
             ForEach(group.members) { container in
                 DockerContainerRow(
@@ -302,6 +337,48 @@ private struct DockerGroupView: View {
                     expandedContainer: $expandedContainer,
                     dockerClient: dockerClient
                 )
+            }
+        }
+        .confirmationDialog(confirmationTitle, isPresented: $showingConfirm, presenting: pendingAction) { action in
+            Button(action == .stop ? "Stop \(group.members.count) containers" : "Restart \(group.members.count) containers",
+                   role: .destructive) {
+                performGroupAction(action)
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var confirmationTitle: String {
+        guard let project = group.project else { return "Confirm" }
+        switch pendingAction {
+        case .stop:    return "Stop all containers in \(project)?"
+        case .restart: return "Restart all containers in \(project)?"
+        case .none:    return ""
+        }
+    }
+
+    private func performGroupAction(_ action: GroupAction) {
+        let verbing = action == .stop ? "Stopping…" : "Restarting…"
+        inFlight = verbing
+        lastError = nil
+        let containers = group.members
+        Task {
+            do {
+                try await withThrowingTaskGroup(of: Void.self) { tg in
+                    for container in containers {
+                        tg.addTask {
+                            switch action {
+                            case .stop:    try await dockerClient.stop(containerId: container.id)
+                            case .restart: try await dockerClient.restart(containerId: container.id)
+                            }
+                        }
+                    }
+                    try await tg.waitForAll()
+                }
+                inFlight = nil
+            } catch {
+                inFlight = nil
+                lastError = "Action failed: \(error)"
             }
         }
     }

@@ -180,15 +180,18 @@ public actor DockerClient {
     /// Send SIGTERM (then SIGKILL after Docker's default timeout) to the
     /// container. The container's main process exits cleanly if it handles
     /// the signal. Useful for "I'm done with this dev DB" scenarios.
+    ///
+    /// Uses a longer timeout than reads (15 s) because Docker waits up to
+    /// 10 s for graceful shutdown before responding.
     public func stop(containerId: String) async throws {
         guard let socketPath = findWorkingSocket() else { throw ClientError.socketUnavailable }
-        _ = try await post("/containers/\(containerId)/stop", socketPath: socketPath)
+        _ = try await post("/containers/\(containerId)/stop", socketPath: socketPath, timeoutOverride: 15.0)
     }
 
     /// Stop then start the container. Equivalent to `docker restart <id>`.
     public func restart(containerId: String) async throws {
         guard let socketPath = findWorkingSocket() else { throw ClientError.socketUnavailable }
-        _ = try await post("/containers/\(containerId)/restart", socketPath: socketPath)
+        _ = try await post("/containers/\(containerId)/restart", socketPath: socketPath, timeoutOverride: 15.0)
     }
 
     // MARK: - HTTP over Unix socket
@@ -198,12 +201,12 @@ public actor DockerClient {
         return try Self.parseHTTPBody(raw)
     }
 
-    private func post(_ path: String, socketPath: String) async throws -> Data {
-        let raw = try await rawRequest(method: "POST", path: path, socketPath: socketPath)
+    private func post(_ path: String, socketPath: String, timeoutOverride: TimeInterval? = nil) async throws -> Data {
+        let raw = try await rawRequest(method: "POST", path: path, socketPath: socketPath, timeoutOverride: timeoutOverride)
         return try Self.parseHTTPBody(raw)
     }
 
-    private func rawRequest(method: String, path: String, socketPath: String) async throws -> Data {
+    private func rawRequest(method: String, path: String, socketPath: String, timeoutOverride: TimeInterval? = nil) async throws -> Data {
         // Content-Length: 0 keeps Docker happy on POSTs with no body —
         // some endpoints (stop, restart) accept no payload, others require
         // an explicit zero length to avoid hanging waiting for a body.
@@ -211,7 +214,7 @@ public actor DockerClient {
         guard let requestData = request.data(using: .utf8) else {
             throw ClientError.invalidResponse
         }
-        let session = SocketSession(socketPath: socketPath, timeout: timeout)
+        let session = SocketSession(socketPath: socketPath, timeout: timeoutOverride ?? timeout)
         return try await session.run(sending: requestData)
     }
 
