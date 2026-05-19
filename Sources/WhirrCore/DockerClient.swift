@@ -175,15 +175,39 @@ public actor DockerClient {
         return (cpuDelta / systemDelta) * onlineCpus * 100.0
     }
 
+    // MARK: - Container actions
+
+    /// Send SIGTERM (then SIGKILL after Docker's default timeout) to the
+    /// container. The container's main process exits cleanly if it handles
+    /// the signal. Useful for "I'm done with this dev DB" scenarios.
+    public func stop(containerId: String) async throws {
+        guard let socketPath = findWorkingSocket() else { throw ClientError.socketUnavailable }
+        _ = try await post("/containers/\(containerId)/stop", socketPath: socketPath)
+    }
+
+    /// Stop then start the container. Equivalent to `docker restart <id>`.
+    public func restart(containerId: String) async throws {
+        guard let socketPath = findWorkingSocket() else { throw ClientError.socketUnavailable }
+        _ = try await post("/containers/\(containerId)/restart", socketPath: socketPath)
+    }
+
     // MARK: - HTTP over Unix socket
 
     private func get(_ path: String, socketPath: String) async throws -> Data {
-        let raw = try await rawRequest(path: path, socketPath: socketPath)
+        let raw = try await rawRequest(method: "GET", path: path, socketPath: socketPath)
         return try Self.parseHTTPBody(raw)
     }
 
-    private func rawRequest(path: String, socketPath: String) async throws -> Data {
-        let request = "GET \(path) HTTP/1.0\r\nHost: localhost\r\nAccept: application/json\r\n\r\n"
+    private func post(_ path: String, socketPath: String) async throws -> Data {
+        let raw = try await rawRequest(method: "POST", path: path, socketPath: socketPath)
+        return try Self.parseHTTPBody(raw)
+    }
+
+    private func rawRequest(method: String, path: String, socketPath: String) async throws -> Data {
+        // Content-Length: 0 keeps Docker happy on POSTs with no body —
+        // some endpoints (stop, restart) accept no payload, others require
+        // an explicit zero length to avoid hanging waiting for a body.
+        let request = "\(method) \(path) HTTP/1.0\r\nHost: localhost\r\nAccept: application/json\r\nContent-Length: 0\r\n\r\n"
         guard let requestData = request.data(using: .utf8) else {
             throw ClientError.invalidResponse
         }
@@ -275,7 +299,15 @@ public actor DockerClient {
             throw ClientError.invalidResponse
         }
         let statusLine = headers.split(separator: "\r\n", maxSplits: 1).first ?? ""
-        guard statusLine.contains(" 200 ") else {
+        // Accept any 2xx — Docker returns 204 No Content for stop/restart,
+        // 200 OK for list/stats, and 304 Not Modified if the action would
+        // be a no-op (already stopped, already in the desired state).
+        let parts = statusLine.split(separator: " ", maxSplits: 2)
+        guard parts.count >= 2, let status = Int(parts[1]) else {
+            throw ClientError.nonOKStatus(String(statusLine))
+        }
+        if status == 304 { return Data() }  // No-op success
+        guard (200..<300).contains(status) else {
             throw ClientError.nonOKStatus(String(statusLine))
         }
         return data.subdata(in: separator.upperBound..<data.count)

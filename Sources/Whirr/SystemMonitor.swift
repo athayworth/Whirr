@@ -8,6 +8,9 @@ final class SystemMonitor {
     var diagnoses: [Diagnosis] = []
     var topProcesses: [ProcessSample] = []
     var topMemoryProcesses: [ProcessSample] = []
+    /// Indexed by pid for fast parent-process lookup from the drill-in
+    /// view. Rebuilt each tick from the full sample set.
+    var processesByPid: [Int32: ProcessSample] = [:]
     var systemSnapshot: SystemSnapshot = .empty
     var lastUpdated: Date = .distantPast
     /// Recent history written by the daemon (empty when daemon isn't installed).
@@ -20,7 +23,9 @@ final class SystemMonitor {
     private let pipeline = SamplingPipeline()
     private let taskBox = TaskBox()
     private let notifications = NotificationService()
-    private let dockerClient = DockerClient()
+    /// Exposed (non-private) so the menu bar's container drill-in can issue
+    /// Stop / Restart actions through the same actor that does the polling.
+    let dockerClient = DockerClient()
     /// In-memory rolling history maintained by the menu bar app itself.
     /// When the daemon writes history.json that's preferred (it persists
     /// across app restarts and reaches back further); otherwise we fall
@@ -87,6 +92,7 @@ final class SystemMonitor {
             .prefix(5)
             .filter { $0.memoryBytes >= 500 * 1_048_576 }
         self.diagnoses = result.diagnoses
+        self.processesByPid = Dictionary(uniqueKeysWithValues: result.processes.map { ($0.pid, $0) })
 
         // Always append the current tick to in-memory history. This works
         // regardless of daemon state and gives the history strip something

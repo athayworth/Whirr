@@ -135,7 +135,7 @@ struct MenuBarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 ForEach(monitor.topProcesses) { proc in
-                    ProcessRow(proc: proc, expandedPid: $expandedPid) {
+                    ProcessRow(proc: proc, expandedPid: $expandedPid, parentLookup: parentLookup) {
                         HStack(spacing: 8) {
                             if proc.diskIOBytesPerSec >= ioBadgeThreshold {
                                 Text(Self.formatRate(proc.diskIOBytesPerSec))
@@ -156,7 +156,7 @@ struct MenuBarView: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
                 ForEach(monitor.topMemoryProcesses) { proc in
-                    ProcessRow(proc: proc, expandedPid: $expandedPid) {
+                    ProcessRow(proc: proc, expandedPid: $expandedPid, parentLookup: parentLookup) {
                         Text(Self.formatBytes(proc.memoryBytes))
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -170,7 +170,11 @@ struct MenuBarView: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
                 ForEach(DockerContainerGroup.group(monitor.dockerContainers)) { group in
-                    DockerGroupView(group: group, expandedContainer: $expandedContainerId)
+                    DockerGroupView(
+                        group: group,
+                        expandedContainer: $expandedContainerId,
+                        dockerClient: monitor.dockerClient
+                    )
                 }
             }
 
@@ -221,6 +225,13 @@ struct MenuBarView: View {
         return String(format: "%.0f MB", mb)
     }
 
+    /// Closure passed down to process drill-in so it can name and act on
+    /// a process's parent without us threading the whole monitor through.
+    private var parentLookup: (Int32) -> ProcessSample? {
+        let lookup = monitor.processesByPid
+        return { pid in lookup[pid] }
+    }
+
     private var footer: some View {
         HStack {
             Text(memoryLine)
@@ -262,6 +273,7 @@ struct MenuBarView: View {
 private struct DockerGroupView: View {
     let group: DockerContainerGroup
     @Binding var expandedContainer: String?
+    let dockerClient: DockerClient
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -287,7 +299,8 @@ private struct DockerGroupView: View {
                 DockerContainerRow(
                     container: container,
                     indented: group.project != nil,
-                    expandedContainer: $expandedContainer
+                    expandedContainer: $expandedContainer,
+                    dockerClient: dockerClient
                 )
             }
         }
@@ -304,6 +317,7 @@ private struct DockerContainerRow: View {
     let container: DockerContainer
     let indented: Bool
     @Binding var expandedContainer: String?
+    let dockerClient: DockerClient
 
     private var isExpanded: Bool { expandedContainer == container.id }
     private var displayName: String {
@@ -341,7 +355,7 @@ private struct DockerContainerRow: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                DockerContainerDetail(container: container)
+                DockerContainerDetail(container: container, dockerClient: dockerClient)
                     .padding(.leading, indented ? 14 : 0)
             }
         }
@@ -356,25 +370,66 @@ private struct DockerContainerRow: View {
 
 private struct DockerContainerDetail: View {
     let container: DockerContainer
+    let dockerClient: DockerClient
+    @State private var inFlight: String? = nil
+    @State private var lastError: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            detailRow("id", container.id)
-            detailRow("name", container.name)
-            detailRow("image", container.image)
-            if let status = container.status {
-                detailRow("status", status)
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                detailRow("id", container.id)
+                detailRow("name", container.name)
+                detailRow("image", container.image)
+                if let status = container.status {
+                    detailRow("status", status)
+                }
+                if let project = container.composeProject {
+                    detailRow("project", project)
+                }
+                if let limit = container.memoryLimitBytes, limit > 0 {
+                    let pct = Double(container.memoryBytes) / Double(limit) * 100
+                    detailRow("limit", "\(formatBytes(limit)) (\(Int(pct))% used)")
+                }
             }
-            if let project = container.composeProject {
-                detailRow("project", project)
-            }
-            if let limit = container.memoryLimitBytes, limit > 0 {
-                let pct = Double(container.memoryBytes) / Double(limit) * 100
-                detailRow("limit", "\(formatBytes(limit)) (\(Int(pct))% used)")
+
+            HStack(spacing: 8) {
+                Button("Stop") { perform("Stop") { try await dockerClient.stop(containerId: container.id) } }
+                    .controlSize(.small)
+                    .disabled(inFlight != nil)
+                    .help("Sends SIGTERM to the container's main process. Equivalent to `docker stop`.")
+                Button("Restart") { perform("Restart") { try await dockerClient.restart(containerId: container.id) } }
+                    .controlSize(.small)
+                    .disabled(inFlight != nil)
+                Spacer()
+                if let inFlight {
+                    Text("\(inFlight)…")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else if let lastError {
+                    Text(lastError)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
         }
         .padding(10)
         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func perform(_ action: String, _ block: @escaping () async throws -> Void) {
+        inFlight = action
+        lastError = nil
+        Task {
+            do {
+                try await block()
+                inFlight = nil
+            } catch {
+                inFlight = nil
+                lastError = "\(action) failed: \(error)"
+            }
+        }
     }
 
     private func detailRow(_ label: String, _ value: String) -> some View {
@@ -407,6 +462,7 @@ private struct DockerContainerDetail: View {
 private struct ProcessRow<Trailing: View>: View {
     let proc: ProcessSample
     @Binding var expandedPid: Int32?
+    let parentLookup: (Int32) -> ProcessSample?
     @ViewBuilder var trailing: () -> Trailing
 
     private var isExpanded: Bool { expandedPid == proc.pid }
@@ -434,7 +490,7 @@ private struct ProcessRow<Trailing: View>: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                ProcessDetail(proc: proc, safety: safety)
+                ProcessDetail(proc: proc, safety: safety, parentLookup: parentLookup)
             }
         }
     }
@@ -443,6 +499,17 @@ private struct ProcessRow<Trailing: View>: View {
 private struct ProcessDetail: View {
     let proc: ProcessSample
     let safety: ProcessSafety
+    let parentLookup: (Int32) -> ProcessSample?
+    /// Two-step force-quit confirmation. First click flips this to true
+    /// and starts a 3-second timer; second click within the window sends
+    /// SIGKILL. Timer auto-resets it.
+    @State private var forceQuitConfirming = false
+    @State private var confirmTimer: Task<Void, Never>? = nil
+
+    private var parent: ProcessSample? {
+        guard let ppid = proc.parentPid, ppid > 1 else { return nil }
+        return parentLookup(ppid)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -453,8 +520,10 @@ private struct ProcessDetail: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 detailRow("pid", "\(proc.pid)")
-                if let ppid = proc.parentPid {
-                    detailRow("parent", "\(ppid)")
+                if let parent {
+                    detailRow("parent", "\(parent.name) (pid \(parent.pid))")
+                } else if let ppid = proc.parentPid {
+                    detailRow("parent", "pid \(ppid)")
                 }
                 if let uid = proc.userId {
                     detailRow("uid", uid == 0 ? "root" : "\(uid)")
@@ -467,7 +536,6 @@ private struct ProcessDetail: View {
                 }
             }
 
-            // Current resource use, plus growth indicator if memory is climbing.
             HStack(spacing: 6) {
                 Text(String(format: "%.1f%% CPU", proc.cpuPercent))
                 Text("·")
@@ -493,12 +561,42 @@ private struct ProcessDetail: View {
                 }
                 .controlSize(.small)
 
-                if proc.userId == getuid() {
+                // Helper rule of thumb: quit the parent app instead.
+                if safety == .helper, let parent, parent.userId == getuid() {
+                    Button("Quit \(parent.name)") {
+                        _ = kill(parent.pid, SIGTERM)
+                    }
+                    .controlSize(.small)
+                    .help("Sends SIGTERM to the parent app (\(parent.name), pid \(parent.pid)).")
+                } else if proc.userId == getuid() {
                     Button("Quit") {
                         _ = kill(proc.pid, SIGTERM)
                     }
                     .controlSize(.small)
                     .help("Sends SIGTERM. The process should exit cleanly.")
+                }
+
+                if proc.userId == getuid() {
+                    Button(forceQuitConfirming ? "Confirm force quit" : "Force quit") {
+                        if forceQuitConfirming {
+                            _ = kill(proc.pid, SIGKILL)
+                            forceQuitConfirming = false
+                            confirmTimer?.cancel()
+                            confirmTimer = nil
+                        } else {
+                            forceQuitConfirming = true
+                            confirmTimer?.cancel()
+                            confirmTimer = Task { @MainActor in
+                                try? await Task.sleep(for: .seconds(3))
+                                if !Task.isCancelled {
+                                    forceQuitConfirming = false
+                                }
+                            }
+                        }
+                    }
+                    .controlSize(.small)
+                    .tint(forceQuitConfirming ? .red : nil)
+                    .help("SIGKILL — abrupt, can lose unsaved state. Click twice within 3 s to confirm.")
                 }
                 Spacer()
             }
