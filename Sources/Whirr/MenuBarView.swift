@@ -7,6 +7,11 @@ struct MenuBarView: View {
     /// Nil = nothing expanded; only one at a time so the menu doesn't grow
     /// unbounded.
     @State private var expandedPid: Int32? = nil
+    /// Same idea but for the Docker section — short container ID of the
+    /// expanded row, nil for none. Separate state from expandedPid so a
+    /// process and a container can be expanded simultaneously (different
+    /// information shapes; no point forcing collapse on each other).
+    @State private var expandedContainerId: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -164,20 +169,8 @@ struct MenuBarView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
-                ForEach(monitor.dockerContainers) { container in
-                    HStack(spacing: 8) {
-                        Text(container.name)
-                            .font(.callout)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        Text(String(format: "%.0f%%", container.cpuPercent))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                        Text(Self.formatBytes(container.memoryBytes))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
+                ForEach(DockerContainerGroup.group(monitor.dockerContainers)) { group in
+                    DockerGroupView(group: group, expandedContainer: $expandedContainerId)
                 }
             }
 
@@ -260,6 +253,149 @@ struct MenuBarView: View {
         case .warning:  return .yellow
         case .critical: return .red
         }
+    }
+}
+
+/// Header + member rows for one group of related containers. Members
+/// for projects show indented under the group header with the compose
+/// service name; ungrouped containers show flat without a header.
+private struct DockerGroupView: View {
+    let group: DockerContainerGroup
+    @Binding var expandedContainer: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let project = group.project {
+                HStack(spacing: 8) {
+                    Image(systemName: "shippingbox")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    Text(project)
+                        .font(.callout.weight(.medium))
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    Text("\(group.members.count)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(formatBytes(group.totalMemoryBytes))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ForEach(group.members) { container in
+                DockerContainerRow(
+                    container: container,
+                    indented: group.project != nil,
+                    expandedContainer: $expandedContainer
+                )
+            }
+        }
+    }
+
+    private func formatBytes(_ bytes: UInt64) -> String {
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
+        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
+    }
+}
+
+private struct DockerContainerRow: View {
+    let container: DockerContainer
+    let indented: Bool
+    @Binding var expandedContainer: String?
+
+    private var isExpanded: Bool { expandedContainer == container.id }
+    private var displayName: String {
+        // When inside a compose project the service name ("db") reads better
+        // than the full container name ("supabase_db_pants-admin").
+        container.composeService ?? container.name
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                expandedContainer = isExpanded ? nil : container.id
+            } label: {
+                HStack(spacing: 8) {
+                    if indented { Spacer().frame(width: 14) }
+                    Text(displayName)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    if container.cpuPercent >= 1 {
+                        Text(String(format: "%.0f%%", container.cpuPercent))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                    Text(formatBytes(container.memoryBytes))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                DockerContainerDetail(container: container)
+                    .padding(.leading, indented ? 14 : 0)
+            }
+        }
+    }
+
+    private func formatBytes(_ bytes: UInt64) -> String {
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
+        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
+    }
+}
+
+private struct DockerContainerDetail: View {
+    let container: DockerContainer
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            detailRow("id", container.id)
+            detailRow("name", container.name)
+            detailRow("image", container.image)
+            if let status = container.status {
+                detailRow("status", status)
+            }
+            if let project = container.composeProject {
+                detailRow("project", project)
+            }
+            if let limit = container.memoryLimitBytes, limit > 0 {
+                let pct = Double(container.memoryBytes) / Double(limit) * 100
+                detailRow("limit", "\(formatBytes(limit)) (\(Int(pct))% used)")
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(label)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.tertiary)
+                .frame(width: 52, alignment: .trailing)
+            Text(value)
+                .font(.caption2)
+                .textSelection(.enabled)
+                .lineLimit(3)
+                .truncationMode(.middle)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func formatBytes(_ bytes: UInt64) -> String {
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
+        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
     }
 }
 

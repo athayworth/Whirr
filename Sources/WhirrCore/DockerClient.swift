@@ -10,6 +10,19 @@ public struct DockerContainer: Codable, Sendable, Hashable, Identifiable {
     public let cpuPercent: Double          // 100% = one core fully used (matches `docker stats`)
     public let memoryBytes: UInt64
     public let memoryLimitBytes: UInt64?
+    /// Docker Compose project name from `com.docker.compose.project` label.
+    /// Lets the UI group related containers (e.g., a Supabase stack) under
+    /// one header instead of five disconnected rows. Nil for containers
+    /// started outside of Compose (`docker run` etc.).
+    public let composeProject: String?
+    /// Container service name from `com.docker.compose.service`. Within a
+    /// Compose project, this is the short logical name ("db", "web") —
+    /// often more readable than the full container name.
+    public let composeService: String?
+    /// Container status string from `/containers/json` ("Up 3 hours",
+    /// "Restarting (1) 2 seconds ago"). Surfaces age + recent restarts
+    /// without us having to compute them.
+    public let status: String?
 
     public init(
         id: String,
@@ -17,7 +30,10 @@ public struct DockerContainer: Codable, Sendable, Hashable, Identifiable {
         image: String,
         cpuPercent: Double,
         memoryBytes: UInt64,
-        memoryLimitBytes: UInt64?
+        memoryLimitBytes: UInt64?,
+        composeProject: String? = nil,
+        composeService: String? = nil,
+        status: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -25,6 +41,9 @@ public struct DockerContainer: Codable, Sendable, Hashable, Identifiable {
         self.cpuPercent = cpuPercent
         self.memoryBytes = memoryBytes
         self.memoryLimitBytes = memoryLimitBytes
+        self.composeProject = composeProject
+        self.composeService = composeService
+        self.status = status
     }
 }
 
@@ -78,6 +97,9 @@ public actor DockerClient {
                             id: container.Id,
                             name: container.Names.first ?? container.Id,
                             image: container.Image,
+                            composeProject: container.Labels?["com.docker.compose.project"],
+                            composeService: container.Labels?["com.docker.compose.service"],
+                            status: container.Status,
                             socketPath: socketPath
                         )
                     }
@@ -112,6 +134,9 @@ public actor DockerClient {
         id: String,
         name: String,
         image: String,
+        composeProject: String?,
+        composeService: String?,
+        status: String?,
         socketPath: String
     ) async throws -> DockerContainer? {
         let data = try await get("/containers/\(id)/stats?stream=false", socketPath: socketPath)
@@ -126,7 +151,10 @@ public actor DockerClient {
             image: image,
             cpuPercent: cpuPercent,
             memoryBytes: raw.memory_stats.usage ?? 0,
-            memoryLimitBytes: raw.memory_stats.limit
+            memoryLimitBytes: raw.memory_stats.limit,
+            composeProject: composeProject,
+            composeService: composeService,
+            status: status
         )
     }
 
@@ -259,6 +287,8 @@ public actor DockerClient {
         let Id: String
         let Names: [String]
         let Image: String
+        let Status: String?
+        let Labels: [String: String]?
     }
 
     struct RawStats: Decodable {
