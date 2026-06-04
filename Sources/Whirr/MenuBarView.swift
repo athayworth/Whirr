@@ -215,12 +215,17 @@ struct MenuBarView: View {
 
     // MARK: - Footer
 
+    @Environment(\.openSettings) private var openSettings
+
     private var footer: some View {
         HStack {
             Text(memoryLine)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             Spacer()
+            Button("Settings…") { openSettings() }
+                .keyboardShortcut(",")
+                .controlSize(.small)
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
                 .controlSize(.small)

@@ -67,17 +67,45 @@ final class SystemMonitor {
         let pipeline = self.pipeline
         let dockerClient = self.dockerClient
         taskBox.task = Task { [weak self] in
-            // Prime the per-process CPU sampler so the next sample produces real deltas.
+            // Prime the per-process CPU sampler so the next sample produces
+            // real deltas. The 2 s settle gives the kernel a window to
+            // populate per-process counters before our first published tick.
             _ = await pipeline.tick(containers: [])
             try? await Task.sleep(for: .seconds(2))
 
             var tickCount = 0
             var lastKnownContainers: [DockerContainer] = []
+
+            // Wall-clock-anchored fire schedule. We aim to fire each tick at
+            // `nextFire`, an instant on `ContinuousClock` (monotonic, advances
+            // through sleep/wake). If the work itself or a system stall makes
+            // us late, we *skip ahead* to the next clean interval slot rather
+            // than fire back-to-back catching up — that would compound CPU
+            // pressure exactly when the system is already struggling. A long
+            // laptop sleep therefore produces one tick on wake, not 600.
+            var nextFire = ContinuousClock.now
             while !Task.isCancelled {
-                // Poll Docker every other tick (~6 s) — the API is slow per
-                // request and per-container stats don't change minute to
-                // minute. Reuse the last-known list on intermediate ticks so
-                // the rules engine still sees container data.
+                // Read the sampling interval *each* iteration so changes from
+                // the Settings panel apply on the next slot without restart.
+                let intervalSeconds = Preferences.samplingIntervalSeconds
+                let interval: Duration = .seconds(intervalSeconds)
+
+                nextFire += interval
+                let now = ContinuousClock.now
+                if nextFire < now {
+                    nextFire = now + interval
+                }
+
+                do {
+                    try await Task.sleep(until: nextFire, clock: .continuous)
+                } catch {
+                    return  // task cancelled
+                }
+
+                // Poll Docker every other tick (~2× interval) — the API is
+                // slow per request and per-container stats don't change
+                // minute to minute. Reuse the last-known list on intermediate
+                // ticks so the rules engine still sees container data.
                 if tickCount % 2 == 0 {
                     lastKnownContainers = await dockerClient.listContainers()
                 }
@@ -87,7 +115,6 @@ final class SystemMonitor {
                     self?.dockerContainers = lastKnownContainers
                 }
                 tickCount += 1
-                try? await Task.sleep(for: .seconds(3))
             }
         }
     }

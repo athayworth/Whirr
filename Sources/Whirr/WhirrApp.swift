@@ -12,6 +12,14 @@ struct WhirrApp: App {
             MenuBarFanIcon(severity: monitor.worstSeverity)
         }
         .menuBarExtraStyle(.window)
+
+        // Standard macOS Settings panel — opened from the menu's
+        // "Settings…" button via `@Environment(\.openSettings)`. Bound
+        // to @AppStorage; SystemMonitor / NotificationService read live
+        // values on each tick so changes take effect on the next sample.
+        Settings {
+            SettingsView()
+        }
     }
 }
 
