@@ -1,6 +1,10 @@
 import SwiftUI
 import WhirrCore
 
+/// Top-level menu bar dropdown. Pinned header (status + freshness) and
+/// footer (RAM/swap + Quit) sandwich a scrollable middle so a stressed
+/// machine with many diagnoses + a large Docker fleet doesn't push the
+/// Quit button below the screen.
 struct MenuBarView: View {
     let monitor: SystemMonitor
     /// Pid of the row that's currently expanded (showing details + actions).
@@ -14,114 +18,96 @@ struct MenuBarView: View {
     @State private var expandedContainerId: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             header
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
 
-            Divider()
+            Divider().padding(.vertical, 12)
 
-            diagnosesSection
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    DiagnosesSection(
+                        hasSampledYet: monitor.hasSampledYet,
+                        diagnoses: monitor.diagnoses
+                    )
 
-            if !monitor.trendHistory.isEmpty {
-                Divider()
-                historySection
+                    if !monitor.trendHistory.isEmpty {
+                        Divider()
+                        HistorySection(history: monitor.trendHistory)
+                    }
+
+                    Divider()
+
+                    topProcessesSection
+                }
+                .padding(.horizontal, 14)
             }
+            .frame(maxHeight: scrollMaxHeight)
 
-            Divider()
-
-            topProcessesSection
-
-            Divider()
+            Divider().padding(.vertical, 12)
 
             footer
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
         }
-        .padding(14)
         .frame(width: 360)
     }
+
+    /// Cap on the scrollable region so the menu doesn't try to consume the
+    /// whole screen on a long diagnoses + Docker fleet. ~520pt leaves room
+    /// for the header and footer on a 14" MacBook screen.
+    private var scrollMaxHeight: CGFloat { 520 }
+
+    // MARK: - Header
 
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: monitor.statusIcon)
                 .foregroundStyle(statusColor)
+                .accessibilityLabel(statusAccessibilityLabel)
             Text("Whirr").font(.headline)
             Spacer()
-            Text(statusLabel)
+            Text(headerStatusText)
                 .font(.caption)
                 .foregroundStyle(statusColor)
+                .monospacedDigit()
+                .accessibilityLabel(statusAccessibilityLabel)
         }
     }
 
-    private var historyBuckets: [HistoryBucket] {
-        HistoryBucket.bucket(monitor.trendHistory, bucketCount: 30, bucketSize: 60, endingAt: Date())
+    /// The header's status text is a freshness label when we have data,
+    /// "Sampling…" before the first sample comes in. Reduces redundancy
+    /// with the colored icon — color carries severity, the text carries
+    /// "is this reading recent?".
+    private var headerStatusText: String {
+        guard monitor.hasSampledYet else { return "Sampling…" }
+        let secondsAgo = Int(Date().timeIntervalSince(monitor.lastUpdated))
+        if secondsAgo < 5 { return "just now" }
+        if secondsAgo < 60 { return "\(secondsAgo)s ago" }
+        let minutes = secondsAgo / 60
+        return "\(minutes)m ago"
     }
 
-    @ViewBuilder
-    private var historySection: some View {
-        let buckets = historyBuckets
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Last 30 minutes")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(historySummary(buckets))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-            HStack(spacing: 1) {
-                ForEach(buckets) { bucket in
-                    Rectangle()
-                        .fill(historyColor(for: bucket.severity))
-                        .frame(height: 10)
-                }
-            }
+    private var statusAccessibilityLabel: String {
+        guard monitor.hasSampledYet else { return "Sampling, no data yet" }
+        switch monitor.worstSeverity {
+        case .ok:       return "Status OK"
+        case .warning:  return "Status warning"
+        case .critical: return "Status critical"
         }
     }
 
-    private func historyColor(for severity: Severity?) -> Color {
-        guard let severity else { return Color.gray.opacity(0.15) }
-        switch severity {
-        case .ok:       return .green.opacity(0.6)
+    private var statusColor: Color {
+        guard monitor.hasSampledYet else { return .secondary }
+        switch monitor.worstSeverity {
+        case .ok:       return .green
         case .warning:  return .yellow
         case .critical: return .red
         }
     }
 
-    private func historySummary(_ buckets: [HistoryBucket]) -> String {
-        let withData = buckets.filter { $0.severity != nil }
-        guard !withData.isEmpty else { return "" }
-        let criticalCount = withData.filter { $0.severity == .critical }.count
-        if criticalCount > 0 {
-            return "critical for \(criticalCount) of last \(withData.count) min"
-        }
-        let warningCount = withData.filter { $0.severity == .warning }.count
-        if warningCount > 0 {
-            return "warning for \(warningCount) of last \(withData.count) min"
-        }
-        return "healthy"
-    }
-
-    @ViewBuilder
-    private var diagnosesSection: some View {
-        if monitor.diagnoses.isEmpty {
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("System running normally.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(monitor.diagnoses) { diagnosis in
-                    if diagnosis.kind == .narrative {
-                        NarrativeCard(diagnosis: diagnosis)
-                    } else {
-                        DiagnosisRow(diagnosis: diagnosis)
-                    }
-                }
-            }
-        }
-    }
+    // MARK: - Top processes
 
     @ViewBuilder
     private var topProcessesSection: some View {
@@ -138,11 +124,11 @@ struct MenuBarView: View {
                     ProcessRow(proc: proc, expandedPid: $expandedPid, parentLookup: parentLookup) {
                         HStack(spacing: 8) {
                             if proc.diskIOBytesPerSec >= ioBadgeThreshold {
-                                Text(Self.formatRate(proc.diskIOBytesPerSec))
+                                Text(MenuFormat.rate(proc.diskIOBytesPerSec))
                                     .font(.caption2.monospacedDigit())
                                     .foregroundStyle(.tertiary)
                             }
-                            Text(String(format: "%.1f%%", proc.cpuPercent))
+                            Text(MenuFormat.cpu(proc.cpuPercent))
                                 .font(.callout.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
@@ -157,7 +143,7 @@ struct MenuBarView: View {
                     .padding(.top, 6)
                 ForEach(monitor.topMemoryProcesses) { proc in
                     ProcessRow(proc: proc, expandedPid: $expandedPid, parentLookup: parentLookup) {
-                        Text(Self.formatBytes(proc.memoryBytes))
+                        Text(MenuFormat.bytes(proc.memoryBytes))
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -190,7 +176,7 @@ struct MenuBarView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
-                        Text(Self.formatRate(proc.diskIOBytesPerSec))
+                        Text(MenuFormat.rate(proc.diskIOBytesPerSec))
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -199,30 +185,17 @@ struct MenuBarView: View {
         }
     }
 
-    // Show an I/O badge on the CPU list when a process is moving at least
-    // 1 MB/s — small enough to surface real activity, big enough to suppress
-    // background noise from every idle process.
+    /// Show an I/O badge on the CPU list when a process is moving at least
+    /// 1 MB/s — small enough to surface real activity, big enough to suppress
+    /// background noise from every idle process.
     private var ioBadgeThreshold: UInt64 { 1_048_576 }
 
-    // Only show the dedicated I/O section when at least one process is
-    // really moving bytes; otherwise it's just clutter.
+    /// Only show the dedicated I/O section when at least one process is
+    /// really moving bytes; otherwise it's just clutter.
     private var topIOProcesses: [ProcessSample] {
         let busy = monitor.topProcesses.sorted { $0.diskIOBytesPerSec > $1.diskIOBytesPerSec }
         guard let leader = busy.first, leader.diskIOBytesPerSec >= 5 * ioBadgeThreshold else { return [] }
         return Array(busy.prefix(3).filter { $0.diskIOBytesPerSec >= ioBadgeThreshold })
-    }
-
-    private static func formatRate(_ bytesPerSec: UInt64) -> String {
-        let mb = Double(bytesPerSec) / 1_048_576
-        if mb >= 10 { return String(format: "%.0f MB/s", mb) }
-        return String(format: "%.1f MB/s", mb)
-    }
-
-    private static func formatBytes(_ bytes: UInt64) -> String {
-        let gb = Double(bytes) / 1_073_741_824
-        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
-        let mb = Double(bytes) / 1_048_576
-        return String(format: "%.0f MB", mb)
     }
 
     /// Closure passed down to process drill-in so it can name and act on
@@ -231,6 +204,8 @@ struct MenuBarView: View {
         let lookup = monitor.processesByPid
         return { pid in lookup[pid] }
     }
+
+    // MARK: - Footer
 
     private var footer: some View {
         HStack {
@@ -248,564 +223,5 @@ struct MenuBarView: View {
         let used = ByteCountFormatter.string(fromByteCount: Int64(monitor.systemSnapshot.memoryUsedBytes), countStyle: .memory)
         let swap = ByteCountFormatter.string(fromByteCount: Int64(monitor.systemSnapshot.swapUsedBytes), countStyle: .memory)
         return "RAM \(used) · swap \(swap)"
-    }
-
-    private var statusLabel: String {
-        switch monitor.worstSeverity {
-        case .ok:       return "OK"
-        case .warning:  return "Warning"
-        case .critical: return "Critical"
-        }
-    }
-
-    private var statusColor: Color {
-        switch monitor.worstSeverity {
-        case .ok:       return .green
-        case .warning:  return .yellow
-        case .critical: return .red
-        }
-    }
-}
-
-/// Header + member rows for one group of related containers. Members
-/// for projects show indented under the group header with the compose
-/// service name; ungrouped containers show flat without a header.
-private struct DockerGroupView: View {
-    let group: DockerContainerGroup
-    @Binding var expandedContainer: String?
-    let dockerClient: DockerClient
-
-    @State private var inFlight: String? = nil
-    @State private var lastError: String? = nil
-    @State private var pendingAction: GroupAction? = nil
-    @State private var showingConfirm: Bool = false
-
-    private enum GroupAction { case stop, restart }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            if let project = group.project {
-                HStack(spacing: 8) {
-                    Image(systemName: "shippingbox")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Text(project)
-                        .font(.callout.weight(.medium))
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                    Text("\(group.members.count)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let inFlight {
-                        Text(inFlight)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(formatBytes(group.totalMemoryBytes))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Menu {
-                        Button("Restart all (\(group.members.count) containers)") {
-                            pendingAction = .restart
-                            showingConfirm = true
-                        }
-                        Button("Stop all (\(group.members.count) containers)") {
-                            pendingAction = .stop
-                            showingConfirm = true
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.callout)
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .disabled(inFlight != nil)
-                }
-            }
-            if let lastError {
-                Text(lastError)
-                    .font(.caption2)
-                    .foregroundStyle(.red)
-                    .lineLimit(2)
-            }
-            ForEach(group.members) { container in
-                DockerContainerRow(
-                    container: container,
-                    indented: group.project != nil,
-                    expandedContainer: $expandedContainer,
-                    dockerClient: dockerClient
-                )
-            }
-        }
-        .confirmationDialog(confirmationTitle, isPresented: $showingConfirm, presenting: pendingAction) { action in
-            Button(action == .stop ? "Stop \(group.members.count) containers" : "Restart \(group.members.count) containers",
-                   role: .destructive) {
-                performGroupAction(action)
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
-
-    private var confirmationTitle: String {
-        guard let project = group.project else { return "Confirm" }
-        switch pendingAction {
-        case .stop:    return "Stop all containers in \(project)?"
-        case .restart: return "Restart all containers in \(project)?"
-        case .none:    return ""
-        }
-    }
-
-    private func performGroupAction(_ action: GroupAction) {
-        let verbing = action == .stop ? "Stopping…" : "Restarting…"
-        inFlight = verbing
-        lastError = nil
-        let containers = group.members
-        Task {
-            do {
-                try await withThrowingTaskGroup(of: Void.self) { tg in
-                    for container in containers {
-                        tg.addTask {
-                            switch action {
-                            case .stop:    try await dockerClient.stop(containerId: container.id)
-                            case .restart: try await dockerClient.restart(containerId: container.id)
-                            }
-                        }
-                    }
-                    try await tg.waitForAll()
-                }
-                inFlight = nil
-            } catch {
-                inFlight = nil
-                lastError = "Action failed: \(error)"
-            }
-        }
-    }
-
-    private func formatBytes(_ bytes: UInt64) -> String {
-        let gb = Double(bytes) / 1_073_741_824
-        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
-        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
-    }
-}
-
-private struct DockerContainerRow: View {
-    let container: DockerContainer
-    let indented: Bool
-    @Binding var expandedContainer: String?
-    let dockerClient: DockerClient
-
-    private var isExpanded: Bool { expandedContainer == container.id }
-    private var displayName: String {
-        // When inside a compose project the service name ("db") reads better
-        // than the full container name ("supabase_db_pants-admin").
-        container.composeService ?? container.name
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Button {
-                expandedContainer = isExpanded ? nil : container.id
-            } label: {
-                HStack(spacing: 8) {
-                    if indented { Spacer().frame(width: 14) }
-                    Text(displayName)
-                        .font(.callout)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                    if container.cpuPercent >= 1 {
-                        Text(String(format: "%.0f%%", container.cpuPercent))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                    }
-                    Text(formatBytes(container.memoryBytes))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                DockerContainerDetail(container: container, dockerClient: dockerClient)
-                    .padding(.leading, indented ? 14 : 0)
-            }
-        }
-    }
-
-    private func formatBytes(_ bytes: UInt64) -> String {
-        let gb = Double(bytes) / 1_073_741_824
-        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
-        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
-    }
-}
-
-private struct DockerContainerDetail: View {
-    let container: DockerContainer
-    let dockerClient: DockerClient
-    @State private var inFlight: String? = nil
-    @State private var lastError: String? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                detailRow("id", container.id)
-                detailRow("name", container.name)
-                detailRow("image", container.image)
-                if let status = container.status {
-                    detailRow("status", status)
-                }
-                if let project = container.composeProject {
-                    detailRow("project", project)
-                }
-                if let limit = container.memoryLimitBytes, limit > 0 {
-                    let pct = Double(container.memoryBytes) / Double(limit) * 100
-                    detailRow("limit", "\(formatBytes(limit)) (\(Int(pct))% used)")
-                }
-            }
-
-            HStack(spacing: 8) {
-                Button("Stop") { perform("Stop") { try await dockerClient.stop(containerId: container.id) } }
-                    .controlSize(.small)
-                    .disabled(inFlight != nil)
-                    .help("Sends SIGTERM to the container's main process. Equivalent to `docker stop`.")
-                Button("Restart") { perform("Restart") { try await dockerClient.restart(containerId: container.id) } }
-                    .controlSize(.small)
-                    .disabled(inFlight != nil)
-                Spacer()
-                if let inFlight {
-                    Text("\(inFlight)…")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                } else if let lastError {
-                    Text(lastError)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-        }
-        .padding(10)
-        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private func perform(_ action: String, _ block: @escaping () async throws -> Void) {
-        inFlight = action
-        lastError = nil
-        Task {
-            do {
-                try await block()
-                inFlight = nil
-            } catch {
-                inFlight = nil
-                lastError = "\(action) failed: \(error)"
-            }
-        }
-    }
-
-    private func detailRow(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text(label)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-                .frame(width: 52, alignment: .trailing)
-            Text(value)
-                .font(.caption2)
-                .textSelection(.enabled)
-                .lineLimit(3)
-                .truncationMode(.middle)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func formatBytes(_ bytes: UInt64) -> String {
-        let gb = Double(bytes) / 1_073_741_824
-        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
-        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
-    }
-}
-
-/// A clickable process row. Renders compactly (safety pill + name +
-/// caller-supplied trailing content). Tapping it expands an inline
-/// detail panel underneath; tapping again collapses. Only one row
-/// across the whole menu can be expanded at a time (state lives at
-/// MenuBarView level).
-private struct ProcessRow<Trailing: View>: View {
-    let proc: ProcessSample
-    @Binding var expandedPid: Int32?
-    let parentLookup: (Int32) -> ProcessSample?
-    @ViewBuilder var trailing: () -> Trailing
-
-    private var isExpanded: Bool { expandedPid == proc.pid }
-    private var safety: ProcessSafety { ProcessClassifier.classify(proc) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                expandedPid = isExpanded ? nil : proc.pid
-            } label: {
-                HStack(spacing: 8) {
-                    SafetyBadge(safety: safety)
-                    Text(proc.name)
-                        .font(.callout)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                    trailing()
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                ProcessDetail(proc: proc, safety: safety, parentLookup: parentLookup)
-            }
-        }
-    }
-}
-
-private struct ProcessDetail: View {
-    let proc: ProcessSample
-    let safety: ProcessSafety
-    let parentLookup: (Int32) -> ProcessSample?
-    /// Two-step force-quit confirmation. First click flips this to true
-    /// and starts a 3-second timer; second click within the window sends
-    /// SIGKILL. Timer auto-resets it.
-    @State private var forceQuitConfirming = false
-    @State private var confirmTimer: Task<Void, Never>? = nil
-
-    private var parent: ProcessSample? {
-        guard let ppid = proc.parentPid, ppid > 1 else { return nil }
-        return parentLookup(ppid)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(safety.advice)
-                .font(.caption)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 3) {
-                detailRow("pid", "\(proc.pid)")
-                if let parent {
-                    detailRow("parent", "\(parent.name) (pid \(parent.pid))")
-                } else if let ppid = proc.parentPid {
-                    detailRow("parent", "pid \(ppid)")
-                }
-                if let uid = proc.userId {
-                    detailRow("uid", uid == 0 ? "root" : "\(uid)")
-                }
-                if let path = proc.executablePath {
-                    detailRow("path", path)
-                }
-                if let cmd = proc.commandLine, cmd != proc.name, cmd != proc.executablePath {
-                    detailRow("command", cmd)
-                }
-            }
-
-            HStack(spacing: 6) {
-                Text(String(format: "%.1f%% CPU", proc.cpuPercent))
-                Text("·")
-                Text(formatBytes(proc.memoryBytes))
-                if let delta = proc.memoryDelta10MinBytes, delta >= 100 * 1_048_576 {
-                    Text("·")
-                    Text("+\(formatBytes(UInt64(delta))) /10m")
-                        .foregroundStyle(.red)
-                }
-                if proc.sustainedIdleSamples >= 100 {
-                    Text("·")
-                    Text("idle \(proc.sustainedIdleSamples * 3 / 60)m")
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                Button("Activity Monitor") {
-                    let url = URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app")
-                    NSWorkspace.shared.open(url)
-                }
-                .controlSize(.small)
-
-                // Helper rule of thumb: quit the parent app instead.
-                if safety == .helper, let parent, parent.userId == getuid() {
-                    Button("Quit \(parent.name)") {
-                        _ = kill(parent.pid, SIGTERM)
-                    }
-                    .controlSize(.small)
-                    .help("Sends SIGTERM to the parent app (\(parent.name), pid \(parent.pid)).")
-                } else if proc.userId == getuid() {
-                    Button("Quit") {
-                        _ = kill(proc.pid, SIGTERM)
-                    }
-                    .controlSize(.small)
-                    .help("Sends SIGTERM. The process should exit cleanly.")
-                }
-
-                if proc.userId == getuid() {
-                    Button(forceQuitConfirming ? "Confirm force quit" : "Force quit") {
-                        if forceQuitConfirming {
-                            _ = kill(proc.pid, SIGKILL)
-                            forceQuitConfirming = false
-                            confirmTimer?.cancel()
-                            confirmTimer = nil
-                        } else {
-                            forceQuitConfirming = true
-                            confirmTimer?.cancel()
-                            confirmTimer = Task { @MainActor in
-                                try? await Task.sleep(for: .seconds(3))
-                                if !Task.isCancelled {
-                                    forceQuitConfirming = false
-                                }
-                            }
-                        }
-                    }
-                    .controlSize(.small)
-                    .tint(forceQuitConfirming ? .red : nil)
-                    .help("SIGKILL — abrupt, can lose unsaved state. Click twice within 3 s to confirm.")
-                }
-                Spacer()
-            }
-        }
-        .padding(10)
-        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-    }
-
-    private func detailRow(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .top, spacing: 6) {
-            Text(label)
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-                .frame(width: 52, alignment: .trailing)
-            Text(value)
-                .font(.caption2)
-                .textSelection(.enabled)
-                .lineLimit(3)
-                .truncationMode(.middle)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func formatBytes(_ bytes: UInt64) -> String {
-        let gb = Double(bytes) / 1_073_741_824
-        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
-        return String(format: "%.0f MB", Double(bytes) / 1_048_576)
-    }
-}
-
-private struct SafetyBadge: View {
-    let safety: ProcessSafety
-
-    var body: some View {
-        Text(safety.label)
-            .font(.caption2.monospaced())
-            .foregroundStyle(textColor)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(tint.opacity(0.18), in: Capsule())
-            .help(safety.advice)
-            .frame(minWidth: 42, alignment: .center)
-    }
-
-    private var tint: Color {
-        switch safety {
-        case .systemCritical: return .red
-        case .systemService:  return .gray
-        case .userApp:        return .blue
-        case .helper:         return .purple
-        case .devTool:        return .green
-        case .unknown:        return .orange
-        }
-    }
-
-    private var textColor: Color {
-        switch safety {
-        case .systemCritical: return .red
-        case .systemService:  return .secondary
-        case .userApp:        return .blue
-        case .helper:         return .purple
-        case .devTool:        return .green
-        case .unknown:        return .orange
-        }
-    }
-}
-
-private struct NarrativeCard: View {
-    let diagnosis: Diagnosis
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "wand.and.stars")
-                    .foregroundStyle(severityColor)
-                Text(diagnosis.title)
-                    .font(.callout).bold()
-            }
-            Text(diagnosis.detail)
-                .font(.caption)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(severityColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(severityColor.opacity(0.35), lineWidth: 1)
-        )
-    }
-
-    private var severityColor: Color {
-        switch diagnosis.severity {
-        case .critical: return .red
-        case .warning:  return .orange
-        case .ok:       return .blue
-        }
-    }
-}
-
-private struct DiagnosisRow: View {
-    let diagnosis: Diagnosis
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: iconName)
-                .foregroundStyle(iconColor)
-                .frame(width: 14)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(diagnosis.title).font(.callout).bold()
-                Text(diagnosis.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private var iconName: String {
-        switch diagnosis.severity {
-        case .critical: return "exclamationmark.triangle.fill"
-        case .warning:  return "exclamationmark.circle.fill"
-        case .ok:       return "info.circle.fill"
-        }
-    }
-
-    private var iconColor: Color {
-        switch diagnosis.severity {
-        case .critical: return .red
-        case .warning:  return .yellow
-        case .ok:       return .blue
-        }
     }
 }
