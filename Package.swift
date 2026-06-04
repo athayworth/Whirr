@@ -13,7 +13,10 @@ let package = Package(
             name: "Whirr",
             dependencies: ["WhirrCore"],
             path: "Sources/Whirr",
-            exclude: ["Resources/Info.plist"]
+            exclude: [
+                "Resources/Info.plist",
+                "Resources/com.athayworth.whirr.sampler.plist"
+            ]
         ),
         .executableTarget(
             name: "whirr-probe",

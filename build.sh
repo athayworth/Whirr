@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Build Whirr.app — a proper macOS .app bundle with Info.plist (LSUIElement=true)
 # so it runs as a menu bar agent with no dock icon.
+#
+# The whirr-sampler daemon is now bundled INSIDE the app at
+# Contents/MacOS/whirr-sampler, registered via SMAppService.daemon at runtime.
+# The old sudo-installed launchd path under /Library/LaunchDaemons/ remains
+# available as scripts/install-sampler.sh for environments where Dev ID
+# code-signing is unavailable.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -10,6 +16,8 @@ BUILD_DIR=".build/release"
 DIST_DIR="dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
 
+DAEMON_PLIST_NAME="com.athayworth.whirr.sampler.plist"
+
 echo "→ Building release binaries..."
 swift build -c release --product "${APP_NAME}"
 swift build -c release --product whirr-sampler
@@ -18,12 +26,27 @@ echo "→ Assembling ${APP_BUNDLE}..."
 rm -rf "${APP_BUNDLE}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
+mkdir -p "${APP_BUNDLE}/Contents/Library/LaunchDaemons"
 
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
+cp "${BUILD_DIR}/whirr-sampler" "${APP_BUNDLE}/Contents/MacOS/whirr-sampler"
 cp "Sources/Whirr/Resources/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
+cp "Sources/Whirr/Resources/${DAEMON_PLIST_NAME}" \
+   "${APP_BUNDLE}/Contents/Library/LaunchDaemons/${DAEMON_PLIST_NAME}"
 
-echo "→ Ad-hoc codesigning..."
-codesign --force --deep --sign - "${APP_BUNDLE}"
+echo "→ Codesigning (inside out)..."
+# Sign nested binaries first, then the bundle as the outer seal. --options
+# runtime makes the binaries eligible for notarization once a real Developer
+# ID is wired in. --sign - is ad-hoc; swap for "Developer ID Application: ..."
+# when you have a paid Apple Developer account set up.
+codesign --force --options runtime --timestamp=none --sign - \
+    "${APP_BUNDLE}/Contents/MacOS/whirr-sampler"
+codesign --force --options runtime --timestamp=none --sign - \
+    "${APP_BUNDLE}"
+
+# Clear any quarantine attribute so launching the freshly-built app from
+# this script doesn't trip Gatekeeper's "downloaded from internet" check.
+xattr -dr com.apple.quarantine "${APP_BUNDLE}" 2>/dev/null || true
 
 echo
 echo "✓ Built ${APP_BUNDLE}"
@@ -32,5 +55,8 @@ echo "Run it:           open ${APP_BUNDLE}"
 echo "Install:          cp -R ${APP_BUNDLE} /Applications/"
 echo "Auto-launch:      System Settings → General → Login Items → add ${APP_NAME}"
 echo
-echo "Optional: install the privileged sampler daemon for root-process visibility:"
+echo "Advanced sampling (sees root processes): click 'Enable' in Whirr's menu,"
+echo "then approve in System Settings → General → Login Items & Extensions."
+echo
+echo "Legacy fallback (no SMAppService approval required, requires sudo):"
 echo "    sudo scripts/install-sampler.sh"

@@ -47,11 +47,19 @@ struct MenuBarView: View {
 
             Divider().padding(.vertical, 12)
 
-            footer
-                .padding(.horizontal, 14)
-                .padding(.bottom, 14)
+            VStack(alignment: .leading, spacing: 10) {
+                DaemonStatusRow(daemon: monitor.daemonManager)
+                footer
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
         }
         .frame(width: 360)
+        // The menu re-appears every time the user clicks the status item.
+        // Refresh the daemon's status then so a flip in System Settings
+        // (which doesn't notify us) lands on the next open instead of next
+        // launch.
+        .onAppear { monitor.daemonManager.refresh() }
     }
 
     /// Cap on the scrollable region so the menu doesn't try to consume the

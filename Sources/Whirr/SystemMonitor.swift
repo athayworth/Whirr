@@ -26,6 +26,10 @@ final class SystemMonitor {
     /// Exposed (non-private) so the menu bar's container drill-in can issue
     /// Stop / Restart actions through the same actor that does the polling.
     let dockerClient = DockerClient()
+    /// SMAppService wrapper that surfaces "advanced sampling daemon" state
+    /// to the UI. The menu bar shows an enable / approve row when its
+    /// state requires the user to do something.
+    let daemonManager = DaemonManager()
     /// In-memory rolling history maintained by the menu bar app itself.
     /// When the daemon writes history.json that's preferred (it persists
     /// across app restarts and reaches back further); otherwise we fall
