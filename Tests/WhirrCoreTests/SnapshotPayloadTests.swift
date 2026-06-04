@@ -7,7 +7,7 @@ final class SnapshotPayloadTests: XCTestCase {
             capturedAt: Date(timeIntervalSince1970: 1_700_000_000),
             snapshot: SystemSnapshot(
                 memoryUsedBytes: 16 * 1_073_741_824,
-                memoryFreeBytes: 4 * 1_073_741_824,
+                memoryAvailableBytes: 4 * 1_073_741_824,
                 memoryPressure: .critical,
                 swapUsedBytes: 8 * 1_073_741_824,
                 thermalState: .serious,

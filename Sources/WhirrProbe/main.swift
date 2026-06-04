@@ -116,8 +116,8 @@ if CommandLine.arguments.contains("--use-daemon") {
 
 let snapshot = SystemSampler.sample()
 print("\n[1/3] System sampler")
-print("  Memory used:     \(formatBytes(snapshot.memoryUsedBytes))")
-print("  Memory free:     \(formatBytes(snapshot.memoryFreeBytes))")
+print("  Memory used:      \(formatBytes(snapshot.memoryUsedBytes))")
+print("  Memory available: \(formatBytes(snapshot.memoryAvailableBytes))")
 print("  Memory pressure: \(snapshot.memoryPressure)")
 print("  Swap used:       \(formatBytes(snapshot.swapUsedBytes))")
 print("  Thermal state:   \(snapshot.thermalState)")
@@ -132,7 +132,7 @@ if CommandLine.arguments.count > 1, let pid = Int32(CommandLine.arguments[1]) {
 print("\n[\(CommandLine.arguments.count > 1 ? "3/3" : "2/2")] Process sampler (2s window)")
 let processSampler = ProcessSampler()
 _ = processSampler.sample()
-Thread.sleep(forTimeInterval: 2.0)
+try await Task.sleep(for: .seconds(2))
 let processes = processSampler.sample()
 print("  Total processes observed: \(processes.count)")
 

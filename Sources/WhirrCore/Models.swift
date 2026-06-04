@@ -131,7 +131,11 @@ public struct LoadAverage: Hashable, Sendable, Codable {
 
 public struct SystemSnapshot: Sendable, Codable {
     public let memoryUsedBytes: UInt64
-    public let memoryFreeBytes: UInt64
+    /// Bytes the kernel considers reclaimable: `free + inactive + speculative`.
+    /// Activity Monitor calls this "Available." The JSON wire key is kept as
+    /// `memoryFreeBytes` for backward compatibility with existing daemon
+    /// snapshots — see CodingKeys.
+    public let memoryAvailableBytes: UInt64
     public let memoryPressure: MemoryPressure
     public let swapUsedBytes: UInt64
     public let thermalState: ThermalState
@@ -144,7 +148,7 @@ public struct SystemSnapshot: Sendable, Codable {
 
     public init(
         memoryUsedBytes: UInt64,
-        memoryFreeBytes: UInt64,
+        memoryAvailableBytes: UInt64,
         memoryPressure: MemoryPressure,
         swapUsedBytes: UInt64,
         thermalState: ThermalState,
@@ -153,7 +157,7 @@ public struct SystemSnapshot: Sendable, Codable {
         rootDiskTotalBytes: UInt64 = 0
     ) {
         self.memoryUsedBytes = memoryUsedBytes
-        self.memoryFreeBytes = memoryFreeBytes
+        self.memoryAvailableBytes = memoryAvailableBytes
         self.memoryPressure = memoryPressure
         self.swapUsedBytes = swapUsedBytes
         self.thermalState = thermalState
@@ -162,9 +166,20 @@ public struct SystemSnapshot: Sendable, Codable {
         self.rootDiskTotalBytes = rootDiskTotalBytes
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case memoryUsedBytes
+        case memoryAvailableBytes = "memoryFreeBytes"
+        case memoryPressure
+        case swapUsedBytes
+        case thermalState
+        case loadAverage
+        case rootDiskFreeBytes
+        case rootDiskTotalBytes
+    }
+
     public static let empty = SystemSnapshot(
         memoryUsedBytes: 0,
-        memoryFreeBytes: 0,
+        memoryAvailableBytes: 0,
         memoryPressure: .normal,
         swapUsedBytes: 0,
         thermalState: .nominal,
@@ -178,10 +193,14 @@ public struct SystemSnapshot: Sendable, Codable {
     }
 }
 
-public enum MemoryPressure: Int, Sendable, Codable {
+public enum MemoryPressure: Int, Sendable, Codable, Comparable {
     case normal = 0
     case warning = 1
     case critical = 2
+
+    public static func < (lhs: MemoryPressure, rhs: MemoryPressure) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
 }
 
 /// Codable mirror of `ProcessInfo.ThermalState`. We don't use the Foundation

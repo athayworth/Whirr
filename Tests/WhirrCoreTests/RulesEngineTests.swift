@@ -8,7 +8,7 @@ final class RulesEngineTests: XCTestCase {
 
     private func snapshot(
         used: UInt64 = 8 * .gb,
-        free: UInt64 = 8 * .gb,
+        available: UInt64 = 8 * .gb,
         pressure: MemoryPressure = .normal,
         swap: UInt64 = 0,
         thermal: ThermalState = .nominal,
@@ -18,7 +18,7 @@ final class RulesEngineTests: XCTestCase {
     ) -> SystemSnapshot {
         SystemSnapshot(
             memoryUsedBytes: used,
-            memoryFreeBytes: free,
+            memoryAvailableBytes: available,
             memoryPressure: pressure,
             swapUsedBytes: swap,
             thermalState: thermal,
@@ -82,20 +82,29 @@ final class RulesEngineTests: XCTestCase {
     // MARK: - SwapThrashingRule
 
     func testSwapBelowThresholdDoesNotFire() {
-        let result = engine.evaluate(snapshot: snapshot(swap: 1 * .gb), processes: [])
+        let result = engine.evaluate(snapshot: snapshot(pressure: .warning, swap: 1 * .gb), processes: [])
         XCTAssertFalse(titles(result).contains("System is swapping heavily"))
     }
 
     func testSwapWarningFiresAt3GB() {
-        let result = engine.evaluate(snapshot: snapshot(swap: 3 * .gb), processes: [])
+        let result = engine.evaluate(snapshot: snapshot(pressure: .warning, swap: 3 * .gb), processes: [])
         let swap = result.first { $0.title == "System is swapping heavily" }
         XCTAssertEqual(swap?.severity, .warning)
     }
 
     func testSwapCriticalFiresAt8GB() {
-        let result = engine.evaluate(snapshot: snapshot(swap: 8 * .gb), processes: [])
+        let result = engine.evaluate(snapshot: snapshot(pressure: .critical, swap: 8 * .gb), processes: [])
         let swap = result.first { $0.title == "System is swapping heavily" }
         XCTAssertEqual(swap?.severity, .critical)
+    }
+
+    func testSwapStaysSilentWhenPressureNormal() {
+        // Real-world case: a heavy session ended, memory pressure has eased
+        // back to normal, but macOS still holds 13 GB of compressed pages
+        // in swap. The user feels fine right now — the rule shouldn't
+        // perpetually flag critical because of historical pressure.
+        let result = engine.evaluate(snapshot: snapshot(pressure: .normal, swap: 13 * .gb), processes: [])
+        XCTAssertFalse(titles(result).contains("System is swapping heavily"))
     }
 
     // MARK: - ThermalThrottleRule

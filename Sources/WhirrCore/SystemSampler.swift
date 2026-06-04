@@ -2,6 +2,19 @@ import Foundation
 import Darwin
 
 public enum SystemSampler {
+    /// Cached host port for `host_statistics64`. `mach_host_self()`
+    /// returns the same task-wide send right each call without
+    /// incrementing its reference count, so caching just trims a syscall
+    /// per sample — there's no port to deallocate. Captured lazily on
+    /// first access.
+    private static let hostPort: mach_port_t = mach_host_self()
+
+    /// Triggers MemoryPressureMonitor.shared init so its dispatch source
+    /// is hooked up before the first sample fires. Reading
+    /// `.shared.current` later is then either authoritative (a transition
+    /// landed) or `nil` (still in the bootstrap window).
+    private static let pressureMonitor = MemoryPressureMonitor.shared
+
     public static func sample() -> SystemSnapshot {
         let vm = vmStatistics()
         let pageSize = UInt64(vm_kernel_page_size)
@@ -19,7 +32,7 @@ public enum SystemSampler {
         let (rootFree, rootTotal) = rootDiskUsage()
         return SystemSnapshot(
             memoryUsedBytes: usedBytes,
-            memoryFreeBytes: availableBytes,
+            memoryAvailableBytes: availableBytes,
             memoryPressure: classifyPressure(vm: vm),
             swapUsedBytes: swapUsedBytes(),
             thermalState: ThermalState(ProcessInfo.processInfo.thermalState),
@@ -45,7 +58,7 @@ public enum SystemSampler {
         )
         _ = withUnsafeMutablePointer(to: &stats) { ptr in
             ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
-                host_statistics64(mach_host_self(), HOST_VM_INFO64, rebound, &count)
+                host_statistics64(hostPort, HOST_VM_INFO64, rebound, &count)
             }
         }
         return stats
@@ -65,7 +78,22 @@ public enum SystemSampler {
         return LoadAverage(oneMinute: loads[0], fiveMinute: loads[1], fifteenMinute: loads[2])
     }
 
+    /// Two-source pressure classification: the kernel's dispatch-source
+    /// verdict (authoritative when present) max'd with our hand-rolled
+    /// ratio heuristic (fires earlier on the compressor curve and covers
+    /// the boot window before the dispatch source has reported anything).
+    /// Taking the *max* means whichever side sees pressure first wins —
+    /// we never under-report what Activity Monitor would show.
     private static func classifyPressure(vm: vm_statistics64_data_t) -> MemoryPressure {
+        let handRoll = handRolledPressure(vm: vm)
+        guard let kernel = pressureMonitor.current else {
+            // Bootstrap window — no kernel event yet. Trust the hand-roll.
+            return handRoll
+        }
+        return max(handRoll, kernel)
+    }
+
+    private static func handRolledPressure(vm: vm_statistics64_data_t) -> MemoryPressure {
         let resident = UInt64(vm.free_count)
             + UInt64(vm.active_count)
             + UInt64(vm.inactive_count)

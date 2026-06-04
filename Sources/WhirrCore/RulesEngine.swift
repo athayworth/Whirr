@@ -140,6 +140,13 @@ struct SwapThrashingRule: Rule {
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         let gb = Double(ctx.snapshot.swapUsedBytes) / 1_073_741_824
         guard gb >= 2.0 else { return nil }
+        // Total-swap-used is a lagging indicator: macOS holds compressed
+        // pages on disk long after the peak that produced them. If memory
+        // pressure has eased back to .normal, the disk-as-RAM story isn't
+        // happening right now — claiming "swapping heavily" would be a
+        // perpetual red flag after every heavy session. Stay silent until
+        // pressure rises again, which is when the user actually feels it.
+        guard ctx.snapshot.memoryPressure != .normal else { return nil }
         return Diagnosis(
             title: "System is swapping heavily",
             detail: String(format: "%.1f GB of swap in use — disk is being treated as RAM, which is much slower.", gb),
@@ -441,7 +448,7 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         let saturated = diagnoses.first(withTitle: "Memory is saturated")
         let swapping = diagnoses.first(withTitle: "System is swapping heavily")
-        guard saturated != nil, let swap = swapping else { return nil }
+        guard saturated != nil, swapping != nil else { return nil }
 
         // Don't compete with BackupChokingForegroundNarrative — it's a more specific story.
         if diagnoses.first(withTitle: "Backup is using your system") != nil { return nil }
@@ -459,10 +466,12 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
             suggestion = "Quitting unused apps is the only real fix — adding more swap just makes the disk read more."
         }
 
+        // Saturated memory is the gating signal here — by definition .critical
+        // — so a swap-only-warning shouldn't downgrade a "death spiral" card.
         return Diagnosis(
             title: "Memory + swap death spiral",
             detail: "RAM is full and macOS is paging hard to disk. \(suggestion)",
-            severity: swap.severity,
+            severity: .critical,
             culprits: topMemoryHog.map { [$0.name] } ?? [],
             kind: .narrative
         )
@@ -711,7 +720,10 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
 
         let combinedGB = Double(combined) / 1_073_741_824
         let topThree = candidates.prefix(3)
-        let oldestIdleMinutes = (candidates.map(\.sustainedIdleSamples).max() ?? 0)
+        // Longest streak in the candidate set — phrased as a maximum, not a
+        // minimum, because using "≥ X" with the max of the group overstates
+        // what's true for the smaller candidates.
+        let longestIdleMinutes = (candidates.map(\.sustainedIdleSamples).max() ?? 0)
             * Self.assumedIntervalSeconds / 60
 
         let pieces = topThree.map { proc -> String in
@@ -719,8 +731,8 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
         }
         let extra = candidates.count > 3 ? ", +\(candidates.count - 3) more" : ""
         let detail = String(
-            format: "%@%@ have been idle for ≥ %d min. Closing them would free roughly %.1f GB. Skip any servers you want kept warm.",
-            pieces.joined(separator: ", "), extra, oldestIdleMinutes, combinedGB
+            format: "%@%@ look unused (longest idle: %d min). Closing them would free roughly %.1f GB. Skip any servers you want kept warm.",
+            pieces.joined(separator: ", "), extra, longestIdleMinutes, combinedGB
         )
         return Diagnosis(
             title: "Big processes that look unused",
