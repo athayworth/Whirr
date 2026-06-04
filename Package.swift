@@ -15,7 +15,9 @@ let package = Package(
             path: "Sources/Whirr",
             exclude: [
                 "Resources/Info.plist",
-                "Resources/com.athayworth.whirr.sampler.plist"
+                "Resources/com.athayworth.whirr.sampler.plist",
+                "Resources/AppIcon.icns",
+                "Resources/AppIcon.iconset"
             ]
         ),
         .executableTarget(

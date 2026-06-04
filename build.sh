@@ -31,6 +31,7 @@ mkdir -p "${APP_BUNDLE}/Contents/Library/LaunchDaemons"
 cp "${BUILD_DIR}/${APP_NAME}" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 cp "${BUILD_DIR}/whirr-sampler" "${APP_BUNDLE}/Contents/MacOS/whirr-sampler"
 cp "Sources/Whirr/Resources/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
+cp "Sources/Whirr/Resources/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 cp "Sources/Whirr/Resources/${DAEMON_PLIST_NAME}" \
    "${APP_BUNDLE}/Contents/Library/LaunchDaemons/${DAEMON_PLIST_NAME}"
 
