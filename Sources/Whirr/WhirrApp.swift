@@ -4,6 +4,11 @@ import WhirrCore
 @main
 struct WhirrApp: App {
     @State private var monitor = SystemMonitor()
+    /// Sparkle bridge — owns the SPUStandardUpdaterController so the
+    /// auto-update scheduler starts at launch. Injected into Settings
+    /// so the About tab can drive a manual "Check for Updates…" button
+    /// off the same instance.
+    @StateObject private var updater = UpdaterController()
 
     var body: some Scene {
         MenuBarExtra {
@@ -18,7 +23,7 @@ struct WhirrApp: App {
         // to @AppStorage; SystemMonitor / NotificationService read live
         // values on each tick so changes take effect on the next sample.
         Settings {
-            SettingsView()
+            SettingsView(updater: updater)
         }
     }
 }

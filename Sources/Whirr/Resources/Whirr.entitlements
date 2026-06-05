@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hardened Runtime's Library Validation, by default, refuses to load
+         any framework whose Team ID doesn't match the host app's. Sparkle
+         is signed by org.sparkle-project.Sparkle; Whirr is com.athayworth.whirr;
+         under ad-hoc signing both have empty Team IDs, but macOS still treats
+         them as non-matching and the dyld load fails. Disabling library
+         validation is the recommended runtime exception for apps that embed
+         third-party frameworks — it does NOT weaken codesign verification,
+         it just allows mixed-identifier frameworks to coexist.
+         https://developer.apple.com/documentation/security/hardened_runtime
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

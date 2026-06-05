@@ -4,6 +4,8 @@ import SwiftUI
 /// Pure SwiftUI Form bound to `@AppStorage`; the rest of the app reads
 /// values through `Preferences` and picks up changes on the next tick.
 struct SettingsView: View {
+    @ObservedObject var updater: UpdaterController
+
     @AppStorage(Preferences.Key.samplingIntervalSeconds) private var samplingInterval =
         Preferences.defaultSamplingIntervalSeconds
     @AppStorage(Preferences.Key.notificationsEnabled) private var notificationsEnabled =
@@ -145,13 +147,31 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
+
+            updateRow
+                .padding(.top, 4)
+
             Spacer()
-            Text("MIT License · No network · No telemetry")
+            Text("MIT License · No network (besides update checks) · No telemetry")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var updateRow: some View {
+        if updater.hasFeedURL {
+            Button("Check for Updates…") {
+                updater.checkForUpdates()
+            }
+            .disabled(!updater.canCheckForUpdates)
+        } else {
+            Text("Auto-update not yet configured.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
     }
 
     private var versionString: String {

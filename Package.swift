@@ -4,6 +4,13 @@ import PackageDescription
 let package = Package(
     name: "Whirr",
     platforms: [.macOS(.v14)],
+    dependencies: [
+        // Auto-update framework. EdDSA-signed releases; we ship the public
+        // key in Info.plist (SUPublicEDKey) and sign each release with the
+        // private key via Sparkle's `sign_update` CLI. See README for the
+        // release workflow. Pinned to 2.x to avoid surprise major bumps.
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.6.0")
+    ],
     targets: [
         .target(
             name: "WhirrCore",
@@ -11,13 +18,17 @@ let package = Package(
         ),
         .executableTarget(
             name: "Whirr",
-            dependencies: ["WhirrCore"],
+            dependencies: [
+                "WhirrCore",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             path: "Sources/Whirr",
             exclude: [
                 "Resources/Info.plist",
                 "Resources/com.athayworth.whirr.sampler.plist",
                 "Resources/AppIcon.icns",
-                "Resources/AppIcon.iconset"
+                "Resources/AppIcon.iconset",
+                "Resources/Whirr.entitlements"
             ]
         ),
         .executableTarget(

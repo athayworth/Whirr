@@ -26,5 +26,20 @@
     <true/>
     <key>NSHumanReadableCopyright</key>
     <string>MIT License</string>
+
+    <!-- Sparkle auto-update. Swap SUFeedURL for your real appcast host
+         when you're ready to ship. Swap SUPublicEDKey for the public
+         half of the EdDSA keypair `sparkle/bin/generate_keys` produces
+         (the private half stays in your Keychain and is used by
+         `sparkle/bin/sign_update` at release time). See README's
+         "Release flow" section. -->
+    <key>SUFeedURL</key>
+    <string>https://YOUR_DOMAIN/whirr/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>YOUR_BASE64_PUBLIC_KEY_HERE</string>
+    <!-- Background check cadence is Sparkle's default (~once per day);
+         override with SUScheduledCheckInterval (seconds) if needed. -->
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>

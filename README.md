@@ -110,6 +110,35 @@ After the rules above fire, a second pass runs **narrative rules** that see the 
 
 Precedence is hand-wired: more specific narratives suppress less specific ones via the conditions they check, not by inspecting each other's titles. Add a precedence test alongside any new narrative.
 
+## Auto-update (Sparkle)
+
+Whirr embeds [Sparkle 2](https://sparkle-project.org/) so released builds can update themselves. The plumbing is in place; flipping it on takes three one-time setup steps and a per-release sign step.
+
+### One-time setup
+
+1. **Pick a host for the appcast XML.** Anything that can serve a static file over HTTPS works — GitHub Pages, S3, your own domain. Write the URL into `Sources/Whirr/Resources/Info.plist` at the `SUFeedURL` key (replace `https://YOUR_DOMAIN/whirr/appcast.xml`).
+2. **Generate signing keys.** Download Sparkle's release artifact (the same `Sparkle-for-Swift-Package-Manager.zip` SPM already pulled into `.build/artifacts/sparkle/`) — inside its `bin/` directory:
+   ```sh
+   ./generate_keys
+   ```
+   This stores the private key in your macOS Keychain (item: "https://sparkle-project.org") and prints the public key to stdout. Paste the public key into `Info.plist` at `SUPublicEDKey`. Commit both Info.plist changes.
+3. **Verify the loader entitlement is signed in.** `codesign -d --entitlements - dist/Whirr.app` should show `com.apple.security.cs.disable-library-validation: true`. `build.sh` already passes this; nothing to do unless you've forked the build script.
+
+### Per-release flow
+
+After running `./build.sh`:
+
+1. Zip the bundle: `ditto -c -k --sequesterRsrc --keepParent dist/Whirr.app dist/Whirr.zip`
+2. Sign the update: `./sign_update dist/Whirr.zip` (the `sign_update` CLI lives in the same Sparkle release artifact). Output is an `sparkle:edSignature="…" length="…"` snippet.
+3. Upload `Whirr.zip` to the same host as the appcast.
+4. Append a new `<item>` to `appcast.xml` with the version, release notes, file URL, and the `sparkle:edSignature` + `length` from step 2.
+5. Existing installs will pick up the update on their next scheduled check (Sparkle's default cadence is roughly daily).
+
+### Gotchas
+
+- Until you have a **Developer ID** code-signing certificate, updated builds will hit the same Gatekeeper "Apple cannot check for malicious software" friction as the initial download. Sparkle's EdDSA signature verifies that *the update came from you*; Gatekeeper's Dev ID verifies that *macOS trusts you to ship code at all*. They're separate checks. Wire up Dev ID before promoting auto-update to non-technical users.
+- The "Check for Updates…" button in Settings → About shows "Auto-update not yet configured" until you replace the `YOUR_DOMAIN` placeholder in `SUFeedURL`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
