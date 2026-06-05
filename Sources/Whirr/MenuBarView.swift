@@ -25,25 +25,31 @@ struct MenuBarView: View {
 
             Divider().padding(.vertical, 12)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    DiagnosesSection(
-                        hasSampledYet: monitor.hasSampledYet,
-                        diagnoses: monitor.diagnoses
-                    )
+            // Middle section is NOT wrapped in a ScrollView: SwiftUI's
+            // ScrollView inside MenuBarExtra(style: .window) collapses to
+            // zero height when its `.frame(maxHeight:)` has no parent
+            // height constraint, which hides every diagnosis and process
+            // row. The lists below are already capped (8 CPU + 5 memory +
+            // 3 I/O), so the menu won't get out of hand without it. If
+            // overflow becomes a real problem (e.g. many Docker
+            // containers), add a Docker-section cap before re-introducing
+            // the ScrollView.
+            VStack(alignment: .leading, spacing: 12) {
+                DiagnosesSection(
+                    hasSampledYet: monitor.hasSampledYet,
+                    diagnoses: monitor.diagnoses
+                )
 
-                    if !monitor.trendHistory.isEmpty {
-                        Divider()
-                        HistorySection(history: monitor.trendHistory)
-                    }
-
+                if !monitor.trendHistory.isEmpty {
                     Divider()
-
-                    topProcessesSection
+                    HistorySection(history: monitor.trendHistory)
                 }
-                .padding(.horizontal, 14)
+
+                Divider()
+
+                topProcessesSection
             }
-            .frame(maxHeight: scrollMaxHeight)
+            .padding(.horizontal, 14)
 
             Divider().padding(.vertical, 12)
 
@@ -61,11 +67,6 @@ struct MenuBarView: View {
         // launch.
         .onAppear { monitor.daemonManager.refresh() }
     }
-
-    /// Cap on the scrollable region so the menu doesn't try to consume the
-    /// whole screen on a long diagnoses + Docker fleet. ~520pt leaves room
-    /// for the header and footer on a 14" MacBook screen.
-    private var scrollMaxHeight: CGFloat { 520 }
 
     // MARK: - Header
 

@@ -34,13 +34,11 @@ struct DaemonStatusRow: View {
             )
 
         case .notFound:
-            // Running via `swift run` instead of from the .app bundle —
-            // there's no plist on disk for SMAppService to register.
             advisoryRow(
                 icon: "exclamationmark.shield",
                 iconColor: .secondary,
                 title: "Advanced sampling unavailable",
-                detail: "Run dist/Whirr.app for the bundled daemon path.",
+                detail: notFoundDetail,
                 actionLabel: nil,
                 action: nil
             )
@@ -55,6 +53,21 @@ struct DaemonStatusRow: View {
                 action: { daemon.register() }
             )
         }
+    }
+
+    /// `.notFound` surfaces in two distinct situations. Pick the more
+    /// useful explanation by checking whether we're running inside a real
+    /// `.app` bundle: if we are, the bundle is fine and SMAppService is
+    /// refusing the daemon for another reason (most commonly: ad-hoc
+    /// code signing — SMAppService requires Developer ID).
+    private var notFoundDetail: String {
+        let runningFromBundle = Bundle.main.bundlePath.hasSuffix(".app")
+        if runningFromBundle {
+            return "macOS requires Developer ID signing for the bundled "
+                + "daemon. This build is ad-hoc signed — Whirr is sampling "
+                + "your own processes only."
+        }
+        return "Run dist/Whirr.app for the bundled daemon path."
     }
 
     @ViewBuilder
