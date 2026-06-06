@@ -1,8 +1,32 @@
+<p align="center">
+  <img src="docs/icon-256.png" width="128" alt="Whirr icon">
+</p>
+
 # Whirr
 
 A macOS menu bar app that tells you **why** your Mac is slow — not just how slow.
 
 Most performance monitors (Stats, iStat Menus, Activity Monitor) show gauges and let you draw your own conclusions. Whirr runs a rules engine over CPU, memory, swap, thermal, and per-process activity, and surfaces a plain-English diagnosis: *"Backup is hammering your system"*, *"Memory is saturated — apps will stutter"*, *"CPU is throttling from heat"*.
+
+> Local, privacy-respecting (no network besides update checks), MIT-licensed, no telemetry.
+
+<!-- TODO: drop a real menu screenshot at docs/screenshot-menu.png and uncomment.
+<p align="center">
+  <img src="docs/screenshot-menu.png" width="360" alt="Whirr menu screenshot">
+</p>
+-->
+
+## Table of contents
+
+- [Requirements](#requirements)
+- [Build](#build)
+- [Optional: privileged sampler daemon](#optional-privileged-sampler-daemon)
+- [Develop](#develop)
+- [Architecture](#architecture)
+- [Rules (v0.1)](#rules-v01)
+- [Narratives](#narratives)
+- [Auto-update (Sparkle)](#auto-update-sparkle)
+- [License](#license)
 
 ## Requirements
 
@@ -59,6 +83,22 @@ swift build                 # compile both targets
 swift test                  # unit tests for the rules engine
 swift run whirr-probe       # CLI probe — verifies samplers + rules, prints a snapshot
 swift run Whirr             # run the menu bar app from terminal (logs to stdout)
+```
+
+The probe is the fastest way to verify a change against your real machine — no
+rebuild of the app bundle needed. Useful flags:
+
+```sh
+swift run whirr-probe                       # standard: system + processes + rules
+swift run whirr-probe --docker              # also hit Docker's Unix socket and dump
+                                            # per-container CPU/mem (verifies the
+                                            # DockerClient wire format end to end)
+swift run whirr-probe --use-daemon          # read the installed sampler's snapshot
+                                            # file and re-run the rules engine
+                                            # against it — useful for testing rule
+                                            # changes against root-process data
+swift run whirr-probe <pid>                 # CPU-time API diagnostic for a single
+                                            # pid (cross-check against `top`)
 ```
 
 ## Architecture
