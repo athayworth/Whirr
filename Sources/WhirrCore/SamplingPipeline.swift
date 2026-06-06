@@ -45,7 +45,7 @@ public actor SamplingPipeline {
     private let clock: @Sendable () -> Date
 
     private let processSampler = ProcessSampler()
-    private let rules = RulesEngine()
+    private let rules: RulesEngine
     private let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
@@ -56,12 +56,14 @@ public actor SamplingPipeline {
         snapshotPath: String = SamplingPipeline.defaultSnapshotPath,
         historyPath: String = SamplingPipeline.defaultHistoryPath,
         freshnessWindow: TimeInterval = SamplingPipeline.defaultFreshnessWindow,
-        clock: @Sendable @escaping () -> Date = { Date() }
+        clock: @Sendable @escaping () -> Date = { Date() },
+        rulesConfig: RulesConfig = .default
     ) {
         self.snapshotPath = snapshotPath
         self.historyPath = historyPath
         self.freshnessWindow = freshnessWindow
         self.clock = clock
+        self.rules = RulesEngine(config: rulesConfig)
     }
 
     public func tick(containers: [DockerContainer] = []) -> Result {

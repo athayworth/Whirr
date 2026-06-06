@@ -25,9 +25,13 @@ final class SystemMonitor {
     /// `inMemoryHistory` for the system view.
     var dockerHistory = DockerHistoryTracker()
 
-    private let pipeline = SamplingPipeline()
+    private let pipeline: SamplingPipeline
     private let taskBox = TaskBox()
     private let notifications = NotificationService()
+    /// Outcome of loading rules.json at launch — surfaced in the Settings
+    /// → Rules tab so the user knows whether their file took effect or
+    /// fell back to defaults.
+    let rulesConfigLoadResult: RulesConfigStore.LoadResult
     /// Exposed (non-private) so the menu bar's container drill-in can issue
     /// Stop / Restart actions through the same actor that does the polling.
     let dockerClient = DockerClient()
@@ -43,6 +47,12 @@ final class SystemMonitor {
     private static let inMemoryHistoryCapacity = 600  // ~30 min at 3 s
 
     init() {
+        // Load rules.json once at startup. Changes to the file require an
+        // app restart to take effect — documented in Settings → Rules.
+        let store = RulesConfigStore()
+        let (config, result) = store.load()
+        self.rulesConfigLoadResult = result
+        self.pipeline = SamplingPipeline(rulesConfig: config)
         start()
     }
 

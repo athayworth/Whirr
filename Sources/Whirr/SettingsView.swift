@@ -1,10 +1,15 @@
 import SwiftUI
+import AppKit
+import WhirrCore
 
 /// macOS Settings panel — opened from the menu bar's "Settings…" item.
 /// Pure SwiftUI Form bound to `@AppStorage`; the rest of the app reads
 /// values through `Preferences` and picks up changes on the next tick.
 struct SettingsView: View {
     @ObservedObject var updater: UpdaterController
+    /// Outcome of loading rules.json at startup. Drives the status hint
+    /// in the Rules tab — "loaded", "no file yet", "malformed", etc.
+    let rulesLoadResult: RulesConfigStore.LoadResult
 
     @AppStorage(Preferences.Key.samplingIntervalSeconds) private var samplingInterval =
         Preferences.defaultSamplingIntervalSeconds
@@ -36,10 +41,12 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             notifications
                 .tabItem { Label("Notifications", systemImage: "bell") }
+            rules
+                .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
             about
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 460, height: 320)
+        .frame(width: 460, height: 340)
     }
 
     // MARK: - General
@@ -125,6 +132,94 @@ struct SettingsView: View {
     private var cooldownLabel: String {
         let minutes = Int(notificationCooldown / 60)
         return "\(minutes) min"
+    }
+
+    // MARK: - Rules
+
+    @State private var rulesActionMessage: String? = nil
+
+    private var rules: some View {
+        Form {
+            Section {
+                Text("Edit `~/Library/Application Support/Whirr/rules.json` to tune thresholds and mute individual rules. Changes take effect on the next Whirr launch.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section {
+                LabeledContent("Status") {
+                    Text(rulesStatusLabel)
+                        .foregroundStyle(rulesStatusColor)
+                        .font(.caption.monospaced())
+                }
+                LabeledContent("Location") {
+                    Text(rulesPath)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Section {
+                HStack {
+                    Button("Edit rules.json") {
+                        ensureFileExists()
+                        NSWorkspace.shared.open(URL(fileURLWithPath: rulesPath))
+                    }
+                    Button("Show in Finder") {
+                        ensureFileExists()
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: rulesPath)])
+                    }
+                    Spacer()
+                    Button("Reset to defaults") {
+                        do {
+                            try RulesConfigStore().write(.default)
+                            rulesActionMessage = "Wrote defaults. Restart Whirr to apply."
+                        } catch {
+                            rulesActionMessage = "Couldn't write defaults: \(error.localizedDescription)"
+                        }
+                    }
+                }
+                if let rulesActionMessage {
+                    Text(rulesActionMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.top, 8)
+    }
+
+    private var rulesPath: String { RulesConfigStore.defaultPath }
+
+    private var rulesStatusLabel: String {
+        switch rulesLoadResult {
+        case .loaded:                  return "user config in use"
+        case .absent:                  return "no file — using defaults"
+        case .malformed(let reason):   return "malformed: \(reason) — defaults in use"
+        case .versionMismatch(let v):  return "format v\(v) unsupported — defaults in use"
+        }
+    }
+
+    private var rulesStatusColor: Color {
+        switch rulesLoadResult {
+        case .loaded:                  return .green
+        case .absent:                  return .secondary
+        case .malformed, .versionMismatch: return .orange
+        }
+    }
+
+    /// Open / Show-in-Finder both expect a file on disk. If the user
+    /// hasn't created one yet, seed it with the embedded defaults so they
+    /// have a complete starting point to edit.
+    private func ensureFileExists() {
+        let store = RulesConfigStore()
+        guard !FileManager.default.fileExists(atPath: store.path) else { return }
+        try? store.writeDefaults()
     }
 
     // MARK: - About

@@ -3,7 +3,11 @@ import Foundation
 /// Takes a system snapshot + recent process samples and produces human-readable diagnoses.
 /// Rules are pure functions of their inputs; ordering is by declared rule list.
 public struct RulesEngine: Sendable {
-    public init() {}
+    public let config: RulesConfig
+
+    public init(config: RulesConfig = .default) {
+        self.config = config
+    }
 
     public func evaluate(
         snapshot: SystemSnapshot,
@@ -18,7 +22,7 @@ public struct RulesEngine: Sendable {
         )
 
         var standalone: [Diagnosis] = []
-        for rule in Self.allRules {
+        for rule in standaloneRules where rule.isEnabled {
             if let diagnosis = rule.evaluate(core) {
                 standalone.append(diagnosis)
             }
@@ -26,7 +30,7 @@ public struct RulesEngine: Sendable {
         standalone.sort { $0.severity > $1.severity }
 
         var narratives: [Diagnosis] = []
-        for narrative in Self.allNarratives {
+        for narrative in narrativeRules where narrative.isEnabled {
             if let diagnosis = narrative.evaluate(core, diagnoses: standalone) {
                 narratives.append(diagnosis)
             }
@@ -36,28 +40,36 @@ public struct RulesEngine: Sendable {
         return narratives + standalone
     }
 
-    private static let allRules: [any Rule] = [
-        MemoryPressureRule(),
-        SwapThrashingRule(),
-        ThermalThrottleRule(),
-        OverloadedSystemRule(),
-        BackupHoggingRule(),
-        HighDiskIORule(),
-        RunawayProcessRule(),
-        LowDiskSpaceRule()
-    ]
+    /// Per-tick allocation but the rule structs are cheap value types
+    /// (each is a handful of stored properties). Keeps the engine
+    /// `Sendable` without paying for a synchronization primitive on a
+    /// shared rule list.
+    private var standaloneRules: [any Rule] {
+        [
+            MemoryPressureRule(config: config.memoryPressure),
+            SwapThrashingRule(config: config.swapThrashing),
+            ThermalThrottleRule(config: config.thermalThrottle),
+            OverloadedSystemRule(config: config.overloadedSystem),
+            BackupHoggingRule(config: config.backupHogging),
+            HighDiskIORule(config: config.highDiskIO),
+            RunawayProcessRule(config: config.runawayProcess),
+            LowDiskSpaceRule(config: config.lowDiskSpace)
+        ]
+    }
 
-    private static let allNarratives: [any NarrativeRule] = [
-        BackupChokingForegroundNarrative(),
-        MemorySwapSpiralNarrative(),
-        ThermalThrottleAmplifierNarrative(),
-        DiskMemoryContentionNarrative(),
-        WindowServerHogNarrative(),
-        SpotlightReindexNarrative(),
-        DockerStrainNarrative(),
-        MemoryLeakNarrative(),
-        IdleMemoryHogsNarrative()
-    ]
+    private var narrativeRules: [any NarrativeRule] {
+        [
+            BackupChokingForegroundNarrative(config: config.backupChokingForeground),
+            MemorySwapSpiralNarrative(config: config.memorySwapSpiral),
+            ThermalThrottleAmplifierNarrative(config: config.thermalThrottleAmplifier),
+            DiskMemoryContentionNarrative(config: config.diskMemoryContention),
+            WindowServerHogNarrative(config: config.windowServerHog),
+            SpotlightReindexNarrative(config: config.spotlightReindex),
+            DockerStrainNarrative(config: config.dockerStrain),
+            MemoryLeakNarrative(config: config.memoryLeak),
+            IdleMemoryHogsNarrative(config: config.idleMemoryHogs)
+        ]
+    }
 }
 
 private func formatMBps(_ bytesPerSec: UInt64) -> String {
@@ -97,6 +109,7 @@ public struct CoreContext {
 }
 
 protocol Rule: Sendable {
+    var isEnabled: Bool { get }
     func evaluate(_ ctx: CoreContext) -> Diagnosis?
 }
 
@@ -104,6 +117,7 @@ protocol Rule: Sendable {
 /// can synthesize a multi-signal explanation. Returns nil if no recognizable
 /// pattern is present.
 protocol NarrativeRule: Sendable {
+    var isEnabled: Bool { get }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis?
 }
 
@@ -116,6 +130,8 @@ private extension Array where Element == Diagnosis {
 // MARK: - Rules
 
 struct MemoryPressureRule: Rule {
+    let config: MemoryPressureRuleConfig
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         switch ctx.snapshot.memoryPressure {
         case .critical:
@@ -137,9 +153,11 @@ struct MemoryPressureRule: Rule {
 }
 
 struct SwapThrashingRule: Rule {
+    let config: SwapThrashingRuleConfig
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         let gb = Double(ctx.snapshot.swapUsedBytes) / 1_073_741_824
-        guard gb >= 2.0 else { return nil }
+        guard gb >= config.warningGB else { return nil }
         // Total-swap-used is a lagging indicator: macOS holds compressed
         // pages on disk long after the peak that produced them. If memory
         // pressure has eased back to .normal, the disk-as-RAM story isn't
@@ -150,12 +168,14 @@ struct SwapThrashingRule: Rule {
         return Diagnosis(
             title: "System is swapping heavily",
             detail: String(format: "%.1f GB of swap in use — disk is being treated as RAM, which is much slower.", gb),
-            severity: gb >= 6.0 ? .critical : .warning
+            severity: gb >= config.criticalGB ? .critical : .warning
         )
     }
 }
 
 struct ThermalThrottleRule: Rule {
+    let config: ThermalThrottleRuleConfig
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         switch ctx.snapshot.thermalState {
         case .critical:
@@ -177,23 +197,28 @@ struct ThermalThrottleRule: Rule {
 }
 
 struct OverloadedSystemRule: Rule {
+    let config: OverloadedSystemRuleConfig
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         let load = ctx.snapshot.loadAverage.oneMinute
         let cores = Double(max(ctx.coreCount, 1))
         let ratio = load / cores
-        guard ratio >= 1.5 else { return nil }
+        guard ratio >= config.warningRatio else { return nil }
         return Diagnosis(
             title: "System is overloaded",
             detail: String(
                 format: "Load average is %.1f on %d cores (%.1f× capacity). Too many processes are competing.",
                 load, ctx.coreCount, ratio
             ),
-            severity: ratio >= 3.0 ? .critical : .warning
+            severity: ratio >= config.criticalRatio ? .critical : .warning
         )
     }
 }
 
 struct BackupHoggingRule: Rule {
+    let config: BackupHoggingRuleConfig
+    var isEnabled: Bool { config.enabled }
+
     private static let backupProcessNames: Set<String> = [
         "bzserv",
         "bztransmit",
@@ -206,15 +231,11 @@ struct BackupHoggingRule: Rule {
         "borg"
     ]
 
-    // Backup processes are I/O-bound, so a sustained read rate matters more
-    // than CPU%. 5 MB/s is well above idle housekeeping but well below an
-    // active scan/upload.
-    private static let activeIOThreshold: UInt64 = 5 * 1_048_576
-    private static let activeCPUThreshold: Double = 5.0
-
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
+        let activeIOBytes = UInt64(config.activeIOMBs * 1_048_576)
         let active = ctx.processes(named: Self.backupProcessNames).filter {
-            $0.cpuPercent >= Self.activeCPUThreshold || $0.diskIOBytesPerSec >= Self.activeIOThreshold
+            $0.cpuPercent >= config.activeCPUPercent
+                || $0.diskIOBytesPerSec >= activeIOBytes
         }
         guard !active.isEmpty else { return nil }
 
@@ -223,7 +244,7 @@ struct BackupHoggingRule: Rule {
         let names = active.map(\.name).sorted().joined(separator: ", ")
 
         let detail: String
-        if totalIO >= Self.activeIOThreshold {
+        if totalIO >= activeIOBytes {
             detail = String(
                 format: "%@ is reading/writing %@ (%.0f%% CPU). Pause it temporarily to free up disk and memory.",
                 names, formatMBps(totalIO), totalCPU
@@ -235,6 +256,9 @@ struct BackupHoggingRule: Rule {
             )
         }
 
+        // Promotion threshold for warning vs informational has historically
+        // sat at 30 MB/s / 30% CPU. Leave this hardcoded for now — it's a
+        // shape-of-output decision rather than a tunable knob.
         let severity: Severity = (totalIO >= 30 * 1_048_576 || totalCPU >= 30) ? .warning : .ok
         return Diagnosis(
             title: "Backup is using your system",
@@ -246,10 +270,8 @@ struct BackupHoggingRule: Rule {
 }
 
 struct HighDiskIORule: Rule {
-    // 50 MB/s sustained from a single process is enough to noticeably
-    // contend with foreground work on an internal SSD; 200 MB/s pegs it.
-    private static let warningThreshold: UInt64 = 50 * 1_048_576
-    private static let criticalThreshold: UInt64 = 200 * 1_048_576
+    let config: HighDiskIORuleConfig
+    var isEnabled: Bool { config.enabled }
 
     // Backup processes are handled by BackupHoggingRule — don't double-fire.
     // Spotlight (mds_stores, mds) is handled by SpotlightReindexNarrative,
@@ -263,8 +285,10 @@ struct HighDiskIORule: Rule {
     ]
 
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
+        let warningBytes = UInt64(config.warningMBs * 1_048_576)
+        let criticalBytes = UInt64(config.criticalMBs * 1_048_576)
         let heavy = ctx.processes
-            .filter { !Self.excluded.contains($0.name) && $0.diskIOBytesPerSec >= Self.warningThreshold }
+            .filter { !Self.excluded.contains($0.name) && $0.diskIOBytesPerSec >= warningBytes }
             .sorted { $0.diskIOBytesPerSec > $1.diskIOBytesPerSec }
         guard let worst = heavy.first else { return nil }
 
@@ -276,25 +300,25 @@ struct HighDiskIORule: Rule {
                 format: "%@ is %@ %@ from disk. Heavy I/O can make the whole system feel sluggish.",
                 worst.name, verb, formatMBps(worst.diskIOBytesPerSec)
             ),
-            severity: worst.diskIOBytesPerSec >= Self.criticalThreshold ? .critical : .warning,
+            severity: worst.diskIOBytesPerSec >= criticalBytes ? .critical : .warning,
             culprits: heavy.prefix(3).map(\.name)
         )
     }
 }
 
 struct LowDiskSpaceRule: Rule {
+    let config: LowDiskSpaceRuleConfig
+    var isEnabled: Bool { config.enabled }
+
     /// macOS does several costly things as free space drops — APFS metadata
     /// thrash, virtual memory eviction churn, Spotlight reindex deferral.
     /// Above ~85% used everything starts to feel sluggish; above ~95% the
     /// system actively struggles.
-    static let warningPercentUsed: Double = 85
-    static let criticalPercentUsed: Double = 95
-
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         let percentUsed = ctx.snapshot.rootDiskPercentUsed
-        guard percentUsed >= Self.warningPercentUsed else { return nil }
+        guard percentUsed >= config.warningPercentUsed else { return nil }
         let freeGB = Double(ctx.snapshot.rootDiskFreeBytes) / 1_073_741_824
-        let severity: Severity = percentUsed >= Self.criticalPercentUsed ? .critical : .warning
+        let severity: Severity = percentUsed >= config.criticalPercentUsed ? .critical : .warning
         return Diagnosis(
             title: "Disk is nearly full",
             detail: String(
@@ -307,11 +331,13 @@ struct LowDiskSpaceRule: Rule {
 }
 
 struct RunawayProcessRule: Rule {
-    /// Sample count required before we call something a sustained runaway.
-    /// At the nominal 3-second sampling cadence this is ~15 seconds — long
-    /// enough that brief compile/render spikes don't trip the rule.
+    let config: RunawayProcessRuleConfig
+    var isEnabled: Bool { config.enabled }
+
+    /// Default sample counts kept as static so the test suite + narrative
+    /// rules that also read these can stay pointed at one source of truth
+    /// when running with the default config.
     static let minSustainedSamples = 5
-    /// Beyond this many sustained samples (~60 s) we promote to critical.
     static let extendedSustainedSamples = 20
     /// Approximate sampling cadence for converting sample counts to
     /// human-readable seconds in diagnoses. The sampler enforces a
@@ -320,14 +346,14 @@ struct RunawayProcessRule: Rule {
 
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         let sustained = ctx.processes
-            .filter { $0.sustainedHighCpuSamples >= Self.minSustainedSamples }
+            .filter { $0.sustainedHighCpuSamples >= config.minSustainedSamples }
             .sorted { $0.cpuPercent > $1.cpuPercent }
         guard let worst = sustained.first else { return nil }
 
         let identity = displayCommandLine(for: worst)
         let durationSeconds = worst.sustainedHighCpuSamples * Self.assumedIntervalSeconds
         let severity: Severity =
-            (worst.cpuPercent >= 200 || worst.sustainedHighCpuSamples >= Self.extendedSustainedSamples)
+            (worst.cpuPercent >= 200 || worst.sustainedHighCpuSamples >= config.extendedSustainedSamples)
             ? .critical : .warning
         return Diagnosis(
             title: "\(worst.name) has been pegging CPU",
@@ -354,6 +380,8 @@ struct RunawayProcessRule: Rule {
 /// other subsystem is degraded. Backup reads compete with everything else
 /// on the same SSD bandwidth, so the combination is worse than its parts.
 struct BackupChokingForegroundNarrative: NarrativeRule {
+    let config: NarrativeToggle
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         guard let backup = diagnoses.first(withTitle: "Backup is using your system") else { return nil }
 
@@ -389,6 +417,8 @@ struct BackupChokingForegroundNarrative: NarrativeRule {
 /// not the workload. Killing the runaway process won't bring back the lost
 /// performance until the CPU cools off.
 struct ThermalThrottleAmplifierNarrative: NarrativeRule {
+    let config: NarrativeToggle
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         let thermal = diagnoses.first(withTitle: "CPU is throttling from heat")
             ?? diagnoses.first(withTitle: "CPU is critically hot")
@@ -414,6 +444,8 @@ struct ThermalThrottleAmplifierNarrative: NarrativeRule {
 /// macOS uses to read pages back in. Either side alone is annoying; together
 /// they cause sustained stutter.
 struct DiskMemoryContentionNarrative: NarrativeRule {
+    let config: NarrativeToggle
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         // Don't compete with more specific narratives: skip when Backup is
         // active, or when the underlying memory+swap condition that drives
@@ -445,6 +477,8 @@ struct DiskMemoryContentionNarrative: NarrativeRule {
 /// SSD reads compete with whatever the user is doing, slow foreground apps allocate
 /// more memory, which causes more swap. Surface that the only fix is reducing memory load.
 struct MemorySwapSpiralNarrative: NarrativeRule {
+    let config: NarrativeToggle
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         let saturated = diagnoses.first(withTitle: "Memory is saturated")
         let swapping = diagnoses.first(withTitle: "System is swapping heavily")
@@ -486,12 +520,17 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
 /// Only meaningful when the daemon is installed — WindowServer runs as
 /// _windowserver, not the user, so unprivileged Whirr can't see its CPU%.
 struct WindowServerHogNarrative: NarrativeRule {
+    let config: WindowServerHogConfig
+    var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         guard let ws = ctx.processes.first(where: { $0.name == "WindowServer" }),
-              ws.cpuPercent >= 50 else {
+              ws.cpuPercent >= config.cpuPercentThreshold else {
             return nil
         }
-        let severity: Severity = ws.cpuPercent >= 100 ? .critical : .warning
+        // Critical promotion ratio (2× the warning threshold) is hardcoded
+        // — `100%` was the prior shape and tweaking it independently of
+        // the warning threshold has never come up in practice.
+        let severity: Severity = ws.cpuPercent >= (config.cpuPercentThreshold * 2) ? .critical : .warning
         return Diagnosis(
             title: "Graphics layer is bottlenecking",
             detail: String(
@@ -519,9 +558,8 @@ struct WindowServerHogNarrative: NarrativeRule {
 /// On a machine where the user runs *only* Parallels/UTM and not Docker,
 /// this rule stays quiet because `com.docker.backend` won't be running.
 struct DockerStrainNarrative: NarrativeRule {
-    private static let memoryWarnGB: Double = 4.0
-    private static let memoryCritGB: Double = 8.0
-    private static let cpuWarnPercent: Double = 50.0
+    let config: DockerStrainConfig
+    var isEnabled: Bool { config.enabled }
 
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         guard ctx.processes.contains(where: { $0.name.hasPrefix("com.docker.") }) else {
@@ -537,11 +575,11 @@ struct DockerStrainNarrative: NarrativeRule {
         // Only surface a narrative when Docker is actually noticeable —
         // an idle Docker Desktop with no containers running might still
         // hold ~1 GB; don't pester about that.
-        guard memoryGB >= Self.memoryWarnGB || totalCPU >= Self.cpuWarnPercent else {
+        guard memoryGB >= config.memoryWarnGB || totalCPU >= config.cpuWarnPercent else {
             return nil
         }
 
-        let severity: Severity = memoryGB >= Self.memoryCritGB ? .critical : .warning
+        let severity: Severity = memoryGB >= config.memoryCritGB ? .critical : .warning
 
         // If we have per-container stats from the Docker socket, name the
         // heaviest container directly instead of telling the user to run
@@ -594,14 +632,17 @@ struct DockerStrainNarrative: NarrativeRule {
 /// Only meaningful when the daemon is installed — mds and mds_stores run
 /// as root.
 struct SpotlightReindexNarrative: NarrativeRule {
+    let config: SpotlightReindexConfig
+    var isEnabled: Bool { config.enabled }
+
     private static let mdsNames: Set<String> = ["mds_stores", "mds"]
-    private static let activeIOThreshold: UInt64 = 20 * 1_048_576
 
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        let activeIOBytes = UInt64(config.activeIOMBs * 1_048_576)
         let mds = ctx.processes.filter { Self.mdsNames.contains($0.name) }
         let active = mds.filter {
             $0.sustainedHighCpuSamples >= RunawayProcessRule.minSustainedSamples
-                || $0.diskIOBytesPerSec >= Self.activeIOThreshold
+                || $0.diskIOBytesPerSec >= activeIOBytes
         }
         guard !active.isEmpty else { return nil }
 
@@ -609,7 +650,7 @@ struct SpotlightReindexNarrative: NarrativeRule {
         let totalIO = active.reduce(UInt64(0)) { $0 &+ $1.diskIOBytesPerSec }
 
         let detail: String
-        if totalIO >= Self.activeIOThreshold {
+        if totalIO >= activeIOBytes {
             detail = String(
                 format: "Spotlight is rebuilding its index — mds_stores is reading from disk at %@. Expect 10–30 minutes of degraded performance until it finishes. Common triggers: new volume mounted, large file move, recent system update.",
                 formatMBps(totalIO)
@@ -641,19 +682,23 @@ struct SpotlightReindexNarrative: NarrativeRule {
 /// suggests. We don't fire below a 1 GB current footprint — small
 /// processes growing don't warrant a card.
 struct MemoryLeakNarrative: NarrativeRule {
-    /// Minimum growth over 10 min to fire the rule.
+    let config: MemoryLeakConfig
+    var isEnabled: Bool { config.enabled }
+
+    /// Static defaults kept for tests that reference them directly.
     static let growthThresholdBytes: Int64 = 500 * 1_048_576
-    /// Minimum current memory size to be worth flagging.
     static let memoryFloorBytes: UInt64 = 1_073_741_824
-    /// Growth threshold for promoting from warning to critical.
     static let criticalGrowthThresholdBytes: Int64 = 2 * 1_073_741_824
 
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        let growthBytes = Int64(config.growthThresholdMB * 1_048_576)
+        let floorBytes = UInt64(config.memoryFloorMB * 1_048_576)
+        let critBytes = Int64(config.criticalGrowthThresholdMB * 1_048_576)
         let leakers = ctx.processes
             .compactMap { proc -> (proc: ProcessSample, delta: Int64)? in
                 guard let delta = proc.memoryDelta10MinBytes,
-                      delta >= Self.growthThresholdBytes,
-                      proc.memoryBytes >= Self.memoryFloorBytes
+                      delta >= growthBytes,
+                      proc.memoryBytes >= floorBytes
                 else { return nil }
                 return (proc, delta)
             }
@@ -666,7 +711,7 @@ struct MemoryLeakNarrative: NarrativeRule {
         let formerGB = Double(formerBytes) / 1_073_741_824
         let deltaGB = Double(worst.delta) / 1_073_741_824
 
-        let severity: Severity = worst.delta >= Self.criticalGrowthThresholdBytes ? .critical : .warning
+        let severity: Severity = worst.delta >= critBytes ? .critical : .warning
         return Diagnosis(
             title: "\(worst.proc.name) memory has been growing",
             detail: String(
@@ -690,33 +735,31 @@ struct MemoryLeakNarrative: NarrativeRule {
 /// few seconds), then aggregates so the user sees one card with N
 /// candidates rather than N separate diagnoses.
 struct IdleMemoryHogsNarrative: NarrativeRule {
-    /// Per-process memory floor for being flagged. 500 MB is the threshold
-    /// below which closing the process isn't really worth the bother.
+    let config: IdleMemoryHogsConfig
+    var isEnabled: Bool { config.enabled }
+
+    /// Defaults kept as statics for the test suite + downstream readers
+    /// (e.g., MenuBarView's "idle 5m" badge calculation).
     static let memoryFloorBytes: UInt64 = 500 * 1_048_576
-    /// How many consecutive idle samples (CPU < 1%) a process needs before
-    /// we call it idle-enough-to-mention. At 3 s sampling, 100 samples is
-    /// 5 minutes — short bursts of inactivity (between requests on a dev
-    /// server, between keystrokes in an IDE) don't trip the rule.
     static let minIdleSamples = 100
-    /// Combined recoverable memory threshold for firing the narrative.
-    /// One idle 600 MB process probably isn't worth a card; 2 GB across
-    /// several is.
     static let combinedMemoryThresholdBytes: UInt64 = 2 * 1_073_741_824
     /// Approximate sampling cadence for converting sample counts to
     /// minutes in the user-facing message.
     private static let assumedIntervalSeconds = 3
 
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
+        let floorBytes = UInt64(config.memoryFloorMB * 1_048_576)
+        let combinedThresholdBytes = UInt64(config.combinedMemoryThresholdMB * 1_048_576)
         let candidates = ctx.processes
             .filter {
-                $0.memoryBytes >= Self.memoryFloorBytes
-                && $0.sustainedIdleSamples >= Self.minIdleSamples
+                $0.memoryBytes >= floorBytes
+                && $0.sustainedIdleSamples >= config.minIdleSamples
             }
             .sorted { $0.memoryBytes > $1.memoryBytes }
         guard !candidates.isEmpty else { return nil }
 
         let combined = candidates.reduce(UInt64(0)) { $0 &+ $1.memoryBytes }
-        guard combined >= Self.combinedMemoryThresholdBytes else { return nil }
+        guard combined >= combinedThresholdBytes else { return nil }
 
         let combinedGB = Double(combined) / 1_073_741_824
         let topThree = candidates.prefix(3)

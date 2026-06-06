@@ -23,7 +23,10 @@ struct WhirrApp: App {
         // to @AppStorage; SystemMonitor / NotificationService read live
         // values on each tick so changes take effect on the next sample.
         Settings {
-            SettingsView(updater: updater)
+            SettingsView(
+                updater: updater,
+                rulesLoadResult: monitor.rulesConfigLoadResult
+            )
         }
     }
 }
