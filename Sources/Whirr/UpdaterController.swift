@@ -21,8 +21,16 @@ final class UpdaterController: ObservableObject {
     let controller: SPUStandardUpdaterController
 
     init() {
+        // Only start the background scheduler when SUFeedURL points at a
+        // real host. With the placeholder URL still in place (local dev
+        // before the activation steps in TODO.md), Sparkle would hit
+        // YOUR_DOMAIN at its first scheduled check, fail to resolve, and
+        // pop up an "Unable to Check For Updates" modal on the user.
+        // Starting only when configured silences that path until the
+        // appcast URL is real.
+        let isConfigured = Self.hasConfiguredFeedURL()
         self.controller = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: isConfigured,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
@@ -35,6 +43,18 @@ final class UpdaterController: ObservableObject {
             .assign(to: &$canCheckForUpdates)
     }
 
+    /// Read SUFeedURL directly from the bundle Info.plist (the same key
+    /// Sparkle reads) and reject the placeholder. Used both at init to
+    /// decide whether to start the scheduler and at the menu level to
+    /// decide whether to surface the manual button.
+    private static func hasConfiguredFeedURL() -> Bool {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
+              !raw.isEmpty,
+              !raw.contains("YOUR_DOMAIN")
+        else { return false }
+        return true
+    }
+
     func checkForUpdates() {
         controller.updater.checkForUpdates()
     }
@@ -44,9 +64,6 @@ final class UpdaterController: ObservableObject {
     /// during local dev — before a real appcast URL is in Info.plist
     /// the button would just bounce.
     var hasFeedURL: Bool {
-        guard let url = controller.updater.feedURL else { return false }
-        // The placeholder URL is the unmistakable "TODO" form; treat it
-        // as not configured even though Sparkle technically has a value.
-        return !url.absoluteString.contains("YOUR_DOMAIN")
+        Self.hasConfiguredFeedURL()
     }
 }
