@@ -19,6 +19,11 @@ final class SystemMonitor {
     /// Per-container stats from Docker's Unix socket. Empty when Docker isn't
     /// running or the socket isn't reachable.
     var dockerContainers: [DockerContainer] = []
+    /// Ring buffer of per-container CPU+memory samples, indexed by short
+    /// container ID. Drives the sparkline in the expanded detail panel.
+    /// Resets to empty on app restart — in-memory only, like
+    /// `inMemoryHistory` for the system view.
+    var dockerHistory = DockerHistoryTracker()
 
     private let pipeline = SamplingPipeline()
     private let taskBox = TaskBox()
@@ -113,6 +118,7 @@ final class SystemMonitor {
                 await MainActor.run {
                     self?.apply(result)
                     self?.dockerContainers = lastKnownContainers
+                    self?.dockerHistory.record(lastKnownContainers, at: Date())
                 }
                 tickCount += 1
             }

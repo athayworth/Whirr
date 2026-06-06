@@ -168,7 +168,8 @@ struct MenuBarView: View {
                     DockerGroupView(
                         group: group,
                         expandedContainer: $expandedContainerId,
-                        dockerClient: monitor.dockerClient
+                        dockerClient: monitor.dockerClient,
+                        history: monitor.dockerHistory
                     )
                 }
             }

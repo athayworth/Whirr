@@ -8,6 +8,11 @@ struct DockerGroupView: View {
     let group: DockerContainerGroup
     @Binding var expandedContainer: String?
     let dockerClient: DockerClient
+    /// Per-container ring buffer driving the expanded-detail sparkline.
+    /// Threaded through the group + row views purely to reach
+    /// `DockerContainerDetail` — neither the group header nor the row
+    /// itself uses it.
+    let history: DockerHistoryTracker
 
     @State private var inFlight: String? = nil
     @State private var lastError: String? = nil
@@ -69,7 +74,8 @@ struct DockerGroupView: View {
                     container: container,
                     indented: group.project != nil,
                     expandedContainer: $expandedContainer,
-                    dockerClient: dockerClient
+                    dockerClient: dockerClient,
+                    history: history.history(for: container.id) ?? []
                 )
             }
         }
@@ -123,6 +129,7 @@ private struct DockerContainerRow: View {
     let indented: Bool
     @Binding var expandedContainer: String?
     let dockerClient: DockerClient
+    let history: [DockerHistoryPoint]
 
     private var isExpanded: Bool { expandedContainer == container.id }
     private var displayName: String {
@@ -161,8 +168,12 @@ private struct DockerContainerRow: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                DockerContainerDetail(container: container, dockerClient: dockerClient)
-                    .padding(.leading, indented ? 14 : 0)
+                DockerContainerDetail(
+                    container: container,
+                    dockerClient: dockerClient,
+                    history: history
+                )
+                .padding(.leading, indented ? 14 : 0)
             }
         }
     }
@@ -171,6 +182,7 @@ private struct DockerContainerRow: View {
 private struct DockerContainerDetail: View {
     let container: DockerContainer
     let dockerClient: DockerClient
+    let history: [DockerHistoryPoint]
     @State private var inFlight: String? = nil
     @State private var lastError: String? = nil
 
@@ -190,6 +202,15 @@ private struct DockerContainerDetail: View {
                     let pct = Double(container.memoryBytes) / Double(limit) * 100
                     detailRow("limit", "\(MenuFormat.bytes(limit)) (\(Int(pct))% used)")
                 }
+            }
+
+            if history.count >= 2 {
+                ContainerSparkline(history: history, coveredSeconds: coveredSeconds)
+                    .padding(.top, 2)
+            } else if history.count == 1 {
+                Text("Collecting sparkline data…")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
             HStack(spacing: 8) {
@@ -216,6 +237,15 @@ private struct DockerContainerDetail: View {
         }
         .padding(10)
         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// Wall-clock span between the first and last sample, in seconds.
+    /// Used by the sparkline caption so the reader knows whether the
+    /// strip is "the last 30 s" (fresh container) or "the last 28 min."
+    private var coveredSeconds: Int {
+        guard let first = history.first?.capturedAt,
+              let last = history.last?.capturedAt else { return 0 }
+        return max(0, Int(last.timeIntervalSince(first)))
     }
 
     private func perform(_ action: String, _ block: @escaping () async throws -> Void) {
