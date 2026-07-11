@@ -10,6 +10,15 @@ struct WhirrApp: App {
     /// off the same instance.
     @StateObject private var updater = UpdaterController()
 
+    init() {
+        // Show the first-run onboarding window if the user hasn't
+        // finished it yet. Async to next runloop tick so NSApp is
+        // fully constructed before we ask it to activate.
+        DispatchQueue.main.async {
+            OnboardingWindowController.shared.showIfNeeded()
+        }
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(monitor: monitor)
@@ -25,7 +34,8 @@ struct WhirrApp: App {
         Settings {
             SettingsView(
                 updater: updater,
-                rulesLoadResult: monitor.rulesConfigLoadResult
+                rulesLoadResult: monitor.rulesConfigLoadResult,
+                incidentLog: monitor.incidentLog
             )
         }
     }

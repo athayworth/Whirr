@@ -33,7 +33,10 @@ final class RulesEngineConfigTests: XCTestCase {
             snapshot: snapshot(pressure: .warning, swap: 4 * 1_073_741_824),
             processes: []
         )
-        XCTAssertFalse(result.contains { $0.title == "System is swapping heavily" })
+        // Neither the active-paging title nor the volume-only title fire
+        // when the rule is disabled.
+        XCTAssertFalse(result.contains { $0.title == "System is actively paging" })
+        XCTAssertFalse(result.contains { $0.title == "Swap is holding old pages" })
     }
 
     func testDisablingMemoryRuleSuppressesFiring() {
@@ -64,6 +67,9 @@ final class RulesEngineConfigTests: XCTestCase {
     // MARK: - Threshold tuning
 
     func testSwapWarningGBLoweredFiresEarlier() {
+        // With pageInsPerSec=0 (default) the rule emits the "volume only"
+        // title. The important thing this test guards is that lowering
+        // the warning threshold does move the fire point.
         let config = RulesConfig(
             swapThrashing: SwapThrashingRuleConfig(enabled: true, warningGB: 1, criticalGB: 6)
         )
@@ -72,7 +78,7 @@ final class RulesEngineConfigTests: XCTestCase {
             snapshot: snapshot(pressure: .warning, swap: 1_500_000_000),
             processes: []
         )
-        XCTAssertTrue(result.contains { $0.title == "System is swapping heavily" })
+        XCTAssertTrue(result.contains { $0.title == "Swap is holding old pages" })
     }
 
     func testLowDiskSpaceWarningRaisedFiresLater() {

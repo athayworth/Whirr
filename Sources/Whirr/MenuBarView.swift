@@ -1,21 +1,43 @@
 import SwiftUI
 import WhirrCore
 
-/// Top-level menu bar dropdown. Pinned header (status + freshness) and
-/// footer (RAM/swap + Quit) sandwich a scrollable middle so a stressed
-/// machine with many diagnoses + a large Docker fleet doesn't push the
-/// Quit button below the screen.
+/// Top-level menu bar dropdown.
+///
+/// Layout, top to bottom:
+///   • Header (icon + freshness)     ← pinned
+///   • ScrollView                    ← the growable middle
+///       - HeadroomSection (top-of-mind summary)
+///       - DiagnosesSection (narratives + standalone + snoozed footer)
+///       - HistorySection (30 min strip, when we have data)
+///       - HarbrSection (dev servers — only when Harbr is configured)
+///       - Top processes (unified — CPU + memory + I/O in one list)
+///       - Docker containers (only when present)
+///   • Daemon status row + footer    ← pinned
+///
+/// The ScrollView is capped at ~540 px so the whole panel comfortably
+/// fits on a 13" MacBook screen — this is the fix for the runaway
+/// height issue after we added HeadroomSection + duration/trend badges
+/// + snooze affordances + HarbrSection. Pinned header/footer stay put
+/// so the "just now" freshness label and Quit button never scroll off.
 struct MenuBarView: View {
-    let monitor: SystemMonitor
-    /// Pid of the row that's currently expanded (showing details + actions).
-    /// Nil = nothing expanded; only one at a time so the menu doesn't grow
-    /// unbounded.
-    @State private var expandedPid: Int32? = nil
-    /// Same idea but for the Docker section — short container ID of the
-    /// expanded row, nil for none. Separate state from expandedPid so a
-    /// process and a container can be expanded simultaneously (different
-    /// information shapes; no point forcing collapse on each other).
-    @State private var expandedContainerId: String? = nil
+    @Bindable var monitor: SystemMonitor
+    /// User's density preference. Read live from UserDefaults each render
+    /// so toggling in Settings takes effect on the next menu open with
+    /// no restart. Default: rich (false) — keeps existing users' UI as-is.
+    @AppStorage(Preferences.Key.compactMode) private var compactMode = Preferences.defaultCompactMode
+
+    /// Height of the scroll region. Chosen empirically for a 13"
+    /// display — leaves ~120 px for header + footer + safe-area on top
+    /// of the menu bar itself.
+    ///
+    /// **Why `.frame(height:)` not `.frame(maxHeight:)`:** the ScrollView
+    /// sits inside a VStack with no explicit height constraint (the
+    /// MenuBarExtra panel hugs its content). Under those conditions
+    /// SwiftUI collapses a ScrollView with only `maxHeight` to zero
+    /// because it has no basis to pick any other height — the original
+    /// code comment warned about exactly this. Setting a fixed height
+    /// gives it something concrete to render.
+    private static let scrollHeight: CGFloat = 540
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -23,48 +45,84 @@ struct MenuBarView: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 14)
 
-            Divider().padding(.vertical, 12)
+            Divider().padding(.vertical, 10)
 
-            // Middle section is NOT wrapped in a ScrollView: SwiftUI's
-            // ScrollView inside MenuBarExtra(style: .window) collapses to
-            // zero height when its `.frame(maxHeight:)` has no parent
-            // height constraint, which hides every diagnosis and process
-            // row. The lists below are already capped (8 CPU + 5 memory +
-            // 3 I/O), so the menu won't get out of hand without it. If
-            // overflow becomes a real problem (e.g. many Docker
-            // containers), add a Docker-section cap before re-introducing
-            // the ScrollView.
-            VStack(alignment: .leading, spacing: 12) {
-                DiagnosesSection(
-                    hasSampledYet: monitor.hasSampledYet,
-                    diagnoses: monitor.diagnoses
-                )
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HeadroomSection(
+                        hasSampledYet: monitor.hasSampledYet,
+                        headroom: monitor.headroom,
+                        topHogFriendlyName: topHogFriendlyName
+                    )
 
-                if !monitor.trendHistory.isEmpty {
                     Divider()
-                    HistorySection(history: monitor.trendHistory)
+
+                    DiagnosesSection(
+                        hasSampledYet: monitor.hasSampledYet,
+                        contexts: monitor.diagnosisContexts,
+                        snoozeStore: monitor.snoozeStore,
+                        compactMode: compactMode
+                    )
+
+                    if !monitor.trendHistory.isEmpty {
+                        Divider()
+                        HistorySection(history: monitor.trendHistory)
+                    }
+
+                    if !monitor.harbrStatuses.isEmpty {
+                        Divider()
+                        CollapsibleSection(
+                            title: "Dev servers",
+                            id: "harbr",
+                            summary: harbrSummary
+                        ) {
+                            HarbrSection(statuses: monitor.harbrStatuses)
+                        }
+                    }
+
+                    Divider()
+
+                    CollapsibleSection(
+                        title: "Top processes",
+                        id: "topProcesses",
+                        summary: topProcessesSummary
+                    ) {
+                        unifiedTopProcessesRows
+                    }
+
+                    if !monitor.dockerContainers.isEmpty {
+                        Divider()
+                        CollapsibleSection(
+                            title: "Docker containers",
+                            id: "docker",
+                            summary: dockerSummary
+                        ) {
+                            dockerRows
+                        }
+                    }
                 }
-
-                Divider()
-
-                topProcessesSection
+                .padding(.horizontal, 14)
+                .padding(.bottom, 4)
             }
-            .padding(.horizontal, 14)
+            .frame(height: Self.scrollHeight)
 
-            Divider().padding(.vertical, 12)
+            Divider().padding(.vertical, 10)
 
             VStack(alignment: .leading, spacing: 10) {
-                DaemonStatusRow(daemon: monitor.daemonManager)
+                // Only render the row when the state has something the
+                // user can actually do — otherwise the row is 60 pt of
+                // "sorry" text every menu open. Non-actionable state
+                // (`.notFound`) still surfaces as the compact hint icon
+                // in the footer below.
+                if DaemonStatusRow(daemon: monitor.daemonManager).producesRow {
+                    DaemonStatusRow(daemon: monitor.daemonManager)
+                }
                 footer
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
         }
-        .frame(width: 360)
-        // The menu re-appears every time the user clicks the status item.
-        // Refresh the daemon's status then so a flip in System Settings
-        // (which doesn't notify us) lands on the next open instead of next
-        // launch.
+        .frame(width: 380)
         .onAppear { monitor.daemonManager.refresh() }
     }
 
@@ -85,10 +143,6 @@ struct MenuBarView: View {
         }
     }
 
-    /// The header's status text is a freshness label when we have data,
-    /// "Sampling…" before the first sample comes in. Reduces redundancy
-    /// with the colored icon — color carries severity, the text carries
-    /// "is this reading recent?".
     private var headerStatusText: String {
         guard monitor.hasSampledYet else { return "Sampling…" }
         let secondsAgo = Int(Date().timeIntervalSince(monitor.lastUpdated))
@@ -116,100 +170,99 @@ struct MenuBarView: View {
         }
     }
 
-    // MARK: - Top processes
+    // MARK: - Headroom + top-hog friendly name
 
+    /// Look up the top hog's friendly name via ProcessDescriptor, so the
+    /// headroom line reads "Google Chrome is holding 4.2 GB" instead of
+    /// the raw "Google Chrome Helper (Renderer)" that the sampler saw.
+    private var topHogFriendlyName: String? {
+        guard let hogName = monitor.headroom.topHogName,
+              let sample = monitor.topProcesses.first(where: { $0.name == hogName })
+                       ?? monitor.topMemoryProcesses.first(where: { $0.name == hogName })
+        else { return nil }
+        return ProcessDescriptor.shared.friendlyName(for: sample)
+    }
+
+    // MARK: - Unified top processes
+
+    /// Rows for the unified "Top processes" list. The header + collapsible
+    /// wrapper live in the caller — this is just the content.
+    ///
+    /// Prior versions had three separate sections (Top by CPU / Top by
+    /// memory / Top by disk I/O). Chrome typically appeared in all three
+    /// and doubled the menu height. Now: one list — each row shows
+    /// friendly name + CPU + memory + optional I/O badge. Sort:
+    /// CPU-descending. We append big-memory holders that didn't make the
+    /// CPU cut so idle-but-huge processes still surface.
     @ViewBuilder
-    private var topProcessesSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Top processes")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if monitor.topProcesses.isEmpty {
-                Text("Sampling…")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            } else {
-                ForEach(monitor.topProcesses) { proc in
-                    ProcessRow(proc: proc, expandedPid: $expandedPid, parentLookup: parentLookup) {
-                        HStack(spacing: 8) {
-                            if proc.diskIOBytesPerSec >= ioBadgeThreshold {
-                                Text(MenuFormat.rate(proc.diskIOBytesPerSec))
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundStyle(.tertiary)
-                            }
-                            Text(MenuFormat.cpu(proc.cpuPercent))
-                                .font(.callout.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-
-            if !monitor.topMemoryProcesses.isEmpty {
-                Text("Top by memory")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 6)
-                ForEach(monitor.topMemoryProcesses) { proc in
-                    ProcessRow(proc: proc, expandedPid: $expandedPid, parentLookup: parentLookup) {
-                        Text(MenuFormat.bytes(proc.memoryBytes))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            if !monitor.dockerContainers.isEmpty {
-                Text("Docker containers")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 6)
-                ForEach(DockerContainerGroup.group(monitor.dockerContainers)) { group in
-                    DockerGroupView(
-                        group: group,
-                        expandedContainer: $expandedContainerId,
-                        dockerClient: monitor.dockerClient,
-                        history: monitor.dockerHistory
-                    )
-                }
-            }
-
-            if !topIOProcesses.isEmpty {
-                Text("Top by disk I/O")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 6)
-                ForEach(topIOProcesses) { proc in
-                    HStack(spacing: 8) {
-                        Text(proc.name)
-                            .font(.callout)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        Text(MenuFormat.rate(proc.diskIOBytesPerSec))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
+    private var unifiedTopProcessesRows: some View {
+        if unifiedRows.isEmpty {
+            Text("Sampling…")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        } else {
+            ForEach(unifiedRows) { proc in
+                ProcessRow(
+                    proc: proc,
+                    expandedPid: $monitor.expandedPid,
+                    parentLookup: parentLookup,
+                    compactMode: compactMode
+                ) {
+                    UnifiedTrailing(proc: proc)
                 }
             }
         }
     }
 
-    /// Show an I/O badge on the CPU list when a process is moving at least
-    /// 1 MB/s — small enough to surface real activity, big enough to suppress
-    /// background noise from every idle process.
-    private var ioBadgeThreshold: UInt64 { 1_048_576 }
-
-    /// Only show the dedicated I/O section when at least one process is
-    /// really moving bytes; otherwise it's just clutter.
-    private var topIOProcesses: [ProcessSample] {
-        let busy = monitor.topProcesses.sorted { $0.diskIOBytesPerSec > $1.diskIOBytesPerSec }
-        guard let leader = busy.first, leader.diskIOBytesPerSec >= 5 * ioBadgeThreshold else { return [] }
-        return Array(busy.prefix(3).filter { $0.diskIOBytesPerSec >= ioBadgeThreshold })
+    /// Summary string shown next to the "Top processes" header when the
+    /// section is collapsed — a compact "N processes · top: X 42%" hint.
+    private var topProcessesSummary: String? {
+        guard let top = unifiedRows.first else { return nil }
+        let topName = ProcessDescriptor.shared.friendlyName(for: top)
+        return "\(unifiedRows.count) shown · top: \(topName) \(MenuFormat.cpu(top.cpuPercent))"
     }
 
-    /// Closure passed down to process drill-in so it can name and act on
-    /// a process's parent without us threading the whole monitor through.
+    /// Up to N by CPU + up to M additional big memory holders that
+    /// aren't already in the CPU list. Compact mode cuts the totals in
+    /// half so the whole menu shrinks noticeably.
+    private var unifiedRows: [ProcessSample] {
+        let (cpuMax, memMax) = compactMode ? (4, 2) : (6, 3)
+        let byCpu = Array(monitor.topProcesses.prefix(cpuMax))
+        let cpuPids = Set(byCpu.map(\.pid))
+        let extraMemory = monitor.topMemoryProcesses
+            .filter { !cpuPids.contains($0.pid) }
+            .prefix(memMax)
+        return byCpu + extraMemory
+    }
+
+    // MARK: - Docker
+
+    /// Docker container rows. The collapsible wrapper owns the header.
+    @ViewBuilder
+    private var dockerRows: some View {
+        ForEach(DockerContainerGroup.group(monitor.dockerContainers)) { group in
+            DockerGroupView(
+                group: group,
+                expandedContainer: $monitor.expandedContainerId,
+                dockerClient: monitor.dockerClient,
+                history: monitor.dockerHistory
+            )
+        }
+    }
+
+    private var dockerSummary: String? {
+        let count = monitor.dockerContainers.count
+        guard count > 0 else { return nil }
+        return count == 1 ? "1 container" : "\(count) containers"
+    }
+
+    private var harbrSummary: String? {
+        let running = monitor.harbrStatuses.filter(\.isRunning).count
+        let total = monitor.harbrStatuses.count
+        guard total > 0 else { return nil }
+        return "\(running)/\(total) running"
+    }
+
     private var parentLookup: (Int32) -> ProcessSample? {
         let lookup = monitor.processesByPid
         return { pid in lookup[pid] }
@@ -220,14 +273,26 @@ struct MenuBarView: View {
     @Environment(\.openSettings) private var openSettings
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 6) {
             Text(memoryLine)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+            DaemonStatusHint(daemon: monitor.daemonManager)
             Spacer()
-            Button("Settings…") { openSettings() }
-                .keyboardShortcut(",")
-                .controlSize(.small)
+            Button("Settings…") {
+                // `LSUIElement=true` menu bar agent apps aren't
+                // foregrounded when the user clicks the status icon —
+                // the popover renders but the app itself stays
+                // background. Calling `openSettings()` from that state
+                // opens the Settings scene behind other windows (or, on
+                // some macOS versions, not at all). Activating first
+                // brings us to the foreground so the settings window
+                // actually appears on top.
+                NSApp.activate(ignoringOtherApps: true)
+                openSettings()
+            }
+            .keyboardShortcut(",")
+            .controlSize(.small)
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
                 .controlSize(.small)
@@ -239,4 +304,32 @@ struct MenuBarView: View {
         let swap = ByteCountFormatter.string(fromByteCount: Int64(monitor.systemSnapshot.swapUsedBytes), countStyle: .memory)
         return "RAM \(used) · swap \(swap)"
     }
+}
+
+// MARK: - Trailing metrics for the unified row
+
+/// Compact "CPU% · mem · (io)" trailing block for a process row.
+/// One trailing view rather than three separate section-specific ones —
+/// less repetition, and easier to keep the visual weight consistent.
+struct UnifiedTrailing: View {
+    let proc: ProcessSample
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if proc.diskIOBytesPerSec >= ioBadgeThreshold {
+                Text(MenuFormat.rate(proc.diskIOBytesPerSec))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            Text(MenuFormat.bytes(proc.memoryBytes))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Text(MenuFormat.cpu(proc.cpuPercent))
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 44, alignment: .trailing)
+        }
+    }
+
+    private var ioBadgeThreshold: UInt64 { 1_048_576 }
 }

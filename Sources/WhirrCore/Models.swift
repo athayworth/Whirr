@@ -22,13 +22,21 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
     public let severity: Severity
     public let culprits: [String]
     public let kind: Kind
+    /// Titles of standalone diagnoses this one *explains*. Narrative
+    /// rules use this to tell the UI "if I'm showing, hide these lower-
+    /// level rows — I already explain what they were saying." Prevents
+    /// the "Memory + swap death spiral" + "Memory is saturated" +
+    /// "System is actively paging" pile-up where three rows narrate
+    /// the same underlying state at three levels of abstraction.
+    public let subsumes: [String]
 
     public init(
         title: String,
         detail: String,
         severity: Severity,
         culprits: [String] = [],
-        kind: Kind = .standalone
+        kind: Kind = .standalone,
+        subsumes: [String] = []
     ) {
         self.id = UUID()
         self.title = title
@@ -36,6 +44,25 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
         self.severity = severity
         self.culprits = culprits
         self.kind = kind
+        self.subsumes = subsumes
+    }
+
+    // Backward-compatible decoding for daemon payloads written before
+    // `subsumes` existed — missing key decodes to []. Wire format
+    // version is not bumped for the additive change.
+    private enum CodingKeys: String, CodingKey {
+        case id, title, detail, severity, culprits, kind, subsumes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.detail = try c.decode(String.self, forKey: .detail)
+        self.severity = try c.decode(Severity.self, forKey: .severity)
+        self.culprits = try c.decodeIfPresent([String].self, forKey: .culprits) ?? []
+        self.kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .standalone
+        self.subsumes = try c.decodeIfPresent([String].self, forKey: .subsumes) ?? []
     }
 }
 
@@ -145,6 +172,13 @@ public struct SystemSnapshot: Sendable, Codable {
     /// in memory/CPU stats. Defaults to 0 in the empty snapshot.
     public let rootDiskFreeBytes: UInt64
     public let rootDiskTotalBytes: UInt64
+    /// Kernel page-ins per second — a page-in is macOS reading a
+    /// swapped-out page back from disk. This is what "thrashing" actually
+    /// means, distinct from `swapUsedBytes` (which can sit high for hours
+    /// after peak with zero active paging). Zero when the sampler hasn't
+    /// yet observed two ticks to diff against. Optional-on-decode so old
+    /// daemon snapshots that predate the field decode cleanly as 0.
+    public let pageInsPerSecond: Double
 
     public init(
         memoryUsedBytes: UInt64,
@@ -154,7 +188,8 @@ public struct SystemSnapshot: Sendable, Codable {
         thermalState: ThermalState,
         loadAverage: LoadAverage,
         rootDiskFreeBytes: UInt64 = 0,
-        rootDiskTotalBytes: UInt64 = 0
+        rootDiskTotalBytes: UInt64 = 0,
+        pageInsPerSecond: Double = 0
     ) {
         self.memoryUsedBytes = memoryUsedBytes
         self.memoryAvailableBytes = memoryAvailableBytes
@@ -164,6 +199,7 @@ public struct SystemSnapshot: Sendable, Codable {
         self.loadAverage = loadAverage
         self.rootDiskFreeBytes = rootDiskFreeBytes
         self.rootDiskTotalBytes = rootDiskTotalBytes
+        self.pageInsPerSecond = pageInsPerSecond
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -175,6 +211,23 @@ public struct SystemSnapshot: Sendable, Codable {
         case loadAverage
         case rootDiskFreeBytes
         case rootDiskTotalBytes
+        case pageInsPerSecond
+    }
+
+    // Hand-rolled decode so new fields fall back to 0 when reading a
+    // snapshot written by an older daemon that predates them. Keeps the
+    // wire format additive-compatible — no bump of SnapshotPayload.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.memoryUsedBytes = try c.decode(UInt64.self, forKey: .memoryUsedBytes)
+        self.memoryAvailableBytes = try c.decode(UInt64.self, forKey: .memoryAvailableBytes)
+        self.memoryPressure = try c.decode(MemoryPressure.self, forKey: .memoryPressure)
+        self.swapUsedBytes = try c.decode(UInt64.self, forKey: .swapUsedBytes)
+        self.thermalState = try c.decode(ThermalState.self, forKey: .thermalState)
+        self.loadAverage = try c.decode(LoadAverage.self, forKey: .loadAverage)
+        self.rootDiskFreeBytes = try c.decodeIfPresent(UInt64.self, forKey: .rootDiskFreeBytes) ?? 0
+        self.rootDiskTotalBytes = try c.decodeIfPresent(UInt64.self, forKey: .rootDiskTotalBytes) ?? 0
+        self.pageInsPerSecond = try c.decodeIfPresent(Double.self, forKey: .pageInsPerSecond) ?? 0
     }
 
     public static let empty = SystemSnapshot(
@@ -221,6 +274,150 @@ public enum ThermalState: Int, Sendable, Codable {
         case .critical: self = .critical
         @unknown default: self = .nominal
         }
+    }
+}
+
+/// Plain-language "can I keep working?" summary. The rules engine tells
+/// the user *what's wrong*; this tells them *whether they need to act*.
+/// Pure function of the current snapshot + top-hog processes — no state,
+/// no smoothing. Computed once per tick alongside diagnoses.
+public struct HeadroomAssessment: Sendable, Codable, Hashable {
+    public enum Verdict: String, Sendable, Codable {
+        /// Plenty of room. Keep going.
+        case comfortable
+        /// Working fine now but a big new thing (docker up, video export,
+        /// heavy build) would tip you into pressure.
+        case tight
+        /// System is already under real pressure; something to close.
+        case pressed
+    }
+
+    /// Best plain-language answer to "how much slack do I have left?"
+    /// For memory that's available bytes (what macOS can hand out without
+    /// paging). Zero when we don't yet have a valid reading.
+    public let availableMemoryBytes: UInt64
+    public let totalMemoryBytes: UInt64
+    public let verdict: Verdict
+    /// One sentence for the top of the menu — e.g., "Safe to keep going."
+    public let headline: String
+    /// One sentence of context — e.g., "Chrome is holding 4.2 GB."
+    public let context: String
+    /// The single process that would recover the most memory if closed,
+    /// if there's a meaningful one to name.
+    public let topHogName: String?
+    public let topHogBytes: UInt64?
+
+    public init(
+        availableMemoryBytes: UInt64,
+        totalMemoryBytes: UInt64,
+        verdict: Verdict,
+        headline: String,
+        context: String,
+        topHogName: String? = nil,
+        topHogBytes: UInt64? = nil
+    ) {
+        self.availableMemoryBytes = availableMemoryBytes
+        self.totalMemoryBytes = totalMemoryBytes
+        self.verdict = verdict
+        self.headline = headline
+        self.context = context
+        self.topHogName = topHogName
+        self.topHogBytes = topHogBytes
+    }
+}
+
+/// A Harbr project — the subset of Harbr's on-disk config that Whirr uses
+/// for process attribution + the Dev-servers section. Whirr reads
+/// `~/.harbr/config.json` at startup; Harbr's own model has many more
+/// fields, but Whirr only cares about identity + port. Extra JSON keys
+/// are ignored so we're forward-compatible with Harbr's evolution.
+public struct HarbrProject: Sendable, Codable, Hashable, Identifiable {
+    public var id: Int { port }
+    public let name: String
+    public let port: Int
+    public let group: String?
+
+    public init(name: String, port: Int, group: String? = nil) {
+        self.name = name
+        self.port = port
+        self.group = group
+    }
+}
+
+/// Runtime state of a Harbr project as observed by Whirr. Combines the
+/// static config (name/port) with what Whirr found in the process table
+/// or via a local port probe — is anything listening, and if so what's
+/// its CPU/memory footprint. Rendered by HarbrSection in the menu.
+public struct HarbrProjectStatus: Sendable, Hashable, Identifiable {
+    public var id: Int { project.port }
+    public let project: HarbrProject
+    public let isRunning: Bool
+    /// Process holding the port. Nil when nothing's listening (Whirr will
+    /// then show the row as stopped) or when Whirr couldn't attribute
+    /// the port to a process it also saw in the sampler output.
+    public let pid: Int32?
+    public let processName: String?
+    public let cpuPercent: Double?
+    public let memoryBytes: UInt64?
+
+    public init(
+        project: HarbrProject,
+        isRunning: Bool,
+        pid: Int32? = nil,
+        processName: String? = nil,
+        cpuPercent: Double? = nil,
+        memoryBytes: UInt64? = nil
+    ) {
+        self.project = project
+        self.isRunning = isRunning
+        self.pid = pid
+        self.processName = processName
+        self.cpuPercent = cpuPercent
+        self.memoryBytes = memoryBytes
+    }
+}
+
+/// A diagnosis paired with time-based state — how long it's been firing,
+/// which direction it's trending, whether the user snoozed it. The UI
+/// consumes this rather than raw Diagnosis so the "on for 40 min · stable"
+/// badge, snooze button, and dimmed-when-snoozed styling all share the
+/// same source of truth.
+public struct DiagnosisContext: Sendable, Hashable, Identifiable {
+    public enum Trend: String, Sendable, Codable {
+        case improving
+        case stable
+        case worsening
+    }
+
+    public var id: UUID { diagnosis.id }
+    public let diagnosis: Diagnosis
+    /// When the diagnosis (by title) first started firing continuously.
+    /// Reset once the condition clears.
+    public let firstSeenAt: Date
+    /// Seconds since firstSeenAt at the tick this context was built.
+    public let durationSeconds: Int
+    public let trend: Trend
+    /// True while the user's snooze on this title is active. UI hides
+    /// snoozed contexts from the primary list + counts them out of the
+    /// header severity + suppresses notifications.
+    public let isSnoozed: Bool
+    /// Wall-clock time the snooze expires (nil when not snoozed).
+    public let snoozedUntil: Date?
+
+    public init(
+        diagnosis: Diagnosis,
+        firstSeenAt: Date,
+        durationSeconds: Int,
+        trend: Trend,
+        isSnoozed: Bool = false,
+        snoozedUntil: Date? = nil
+    ) {
+        self.diagnosis = diagnosis
+        self.firstSeenAt = firstSeenAt
+        self.durationSeconds = durationSeconds
+        self.trend = trend
+        self.isSnoozed = isSnoozed
+        self.snoozedUntil = snoozedUntil
     }
 }
 

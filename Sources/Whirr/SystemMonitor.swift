@@ -5,7 +5,12 @@ import WhirrCore
 @MainActor
 @Observable
 final class SystemMonitor {
-    var diagnoses: [Diagnosis] = []
+    /// Per-diagnosis contexts (duration + trend). The menu bar filters
+    /// snoozed items out for display; header severity + notifications
+    /// also skip them.
+    var diagnosisContexts: [DiagnosisContext] = []
+    /// "Can I keep going?" summary shown at the top of the menu.
+    var headroom: HeadroomAssessment = .empty
     var topProcesses: [ProcessSample] = []
     var topMemoryProcesses: [ProcessSample] = []
     /// Indexed by pid for fast parent-process lookup from the drill-in
@@ -21,9 +26,26 @@ final class SystemMonitor {
     var dockerContainers: [DockerContainer] = []
     /// Ring buffer of per-container CPU+memory samples, indexed by short
     /// container ID. Drives the sparkline in the expanded detail panel.
-    /// Resets to empty on app restart — in-memory only, like
-    /// `inMemoryHistory` for the system view.
+    /// Resets to empty on app restart — in-memory only.
     var dockerHistory = DockerHistoryTracker()
+    /// Per-project runtime state derived from `~/.harbr/config.json` +
+    /// the current process table. Empty when Harbr isn't configured.
+    var harbrStatuses: [HarbrProjectStatus] = []
+
+    /// Currently-expanded process row (nil = nothing expanded). Lives on
+    /// the monitor rather than as `@State` in MenuBarView so the
+    /// expanded row survives closing and reopening the menu bar panel —
+    /// MenuBarExtra rebuilds the SwiftUI view on each open, which would
+    /// otherwise reset local `@State`.
+    var expandedPid: Int32? = nil
+    /// Same idea for Docker containers. Independent from `expandedPid`
+    /// so a process and a container can be expanded simultaneously.
+    var expandedContainerId: String? = nil
+
+    let snoozeStore = SnoozeStore()
+    /// Persistent log of closed diagnosis incidents. Written by the
+    /// pipeline; read by the Insights tab in Settings.
+    let incidentLog = IncidentLog()
 
     private let pipeline: SamplingPipeline
     private let taskBox = TaskBox()
@@ -52,7 +74,10 @@ final class SystemMonitor {
         let store = RulesConfigStore()
         let (config, result) = store.load()
         self.rulesConfigLoadResult = result
-        self.pipeline = SamplingPipeline(rulesConfig: config)
+        // The monitor owns the incident log so both the pipeline
+        // (writer) and the Insights view (reader) share one instance
+        // and see the same in-memory cache.
+        self.pipeline = SamplingPipeline(rulesConfig: config, incidentLog: incidentLog)
         start()
     }
 
@@ -68,14 +93,23 @@ final class SystemMonitor {
         }
     }
 
+    /// Worst severity across *unsnoozed* contexts. Snoozed diagnoses
+    /// don't drive the header color — that's the whole point of snooze:
+    /// the user has said "I know, I don't want to be reminded."
     var worstSeverity: Severity {
-        diagnoses.map(\.severity).max() ?? .ok
+        visibleDiagnoses.map(\.severity).max() ?? .ok
+    }
+
+    /// The diagnosis list rendered in the menu — minus anything snoozed.
+    var visibleDiagnoses: [Diagnosis] {
+        diagnosisContexts
+            .filter { !snoozeStore.isSnoozed($0.diagnosis.title) }
+            .map(\.diagnosis)
     }
 
     /// False until the first sample has produced data. Lets the UI
     /// distinguish "no problems detected" (worstSeverity == .ok with data)
-    /// from "we don't know yet" (no data) — the latter shouldn't render as
-    /// a confident green check on launch.
+    /// from "we don't know yet" (no data).
     var hasSampledYet: Bool { lastUpdated != .distantPast }
 
     private func start() {
@@ -91,17 +125,11 @@ final class SystemMonitor {
             var tickCount = 0
             var lastKnownContainers: [DockerContainer] = []
 
-            // Wall-clock-anchored fire schedule. We aim to fire each tick at
-            // `nextFire`, an instant on `ContinuousClock` (monotonic, advances
-            // through sleep/wake). If the work itself or a system stall makes
-            // us late, we *skip ahead* to the next clean interval slot rather
-            // than fire back-to-back catching up — that would compound CPU
-            // pressure exactly when the system is already struggling. A long
-            // laptop sleep therefore produces one tick on wake, not 600.
+            // Wall-clock-anchored fire schedule. See the note in the prior
+            // implementation — we skip missed slots rather than fire
+            // back-to-back after a stall.
             var nextFire = ContinuousClock.now
             while !Task.isCancelled {
-                // Read the sampling interval *each* iteration so changes from
-                // the Settings panel apply on the next slot without restart.
                 let intervalSeconds = Preferences.samplingIntervalSeconds
                 let interval: Duration = .seconds(intervalSeconds)
 
@@ -117,10 +145,6 @@ final class SystemMonitor {
                     return  // task cancelled
                 }
 
-                // Poll Docker every other tick (~2× interval) — the API is
-                // slow per request and per-container stats don't change
-                // minute to minute. Reuse the last-known list on intermediate
-                // ticks so the rules engine still sees container data.
                 if tickCount % 2 == 0 {
                     lastKnownContainers = await dockerClient.listContainers()
                 }
@@ -144,10 +168,12 @@ final class SystemMonitor {
             .sorted { $0.memoryBytes > $1.memoryBytes }
             .prefix(5)
             .filter { $0.memoryBytes >= 500 * 1_048_576 }
-        self.diagnoses = result.diagnoses
+        self.diagnosisContexts = result.diagnosisContexts
+        self.headroom = result.headroom
+        self.harbrStatuses = result.harbrStatuses
         // `uniquingKeysWith` over `uniqueKeysWithValues` — duplicate pids
         // shouldn't happen but a trap on the sampling path would take down
-        // the whole monitor. Defensive, not corrective.
+        // the whole monitor.
         self.processesByPid = Dictionary(
             result.processes.map { ($0.pid, $0) },
             uniquingKeysWith: { first, _ in first }
@@ -156,7 +182,10 @@ final class SystemMonitor {
         // Always append the current tick to in-memory history. This works
         // regardless of daemon state and gives the history strip something
         // to show on a fresh install before the daemon's file gets used.
-        let worst = result.diagnoses.map(\.severity).max() ?? .ok
+        // Snoozed diagnoses don't drive worstSeverity for the header — the
+        // history strip uses the *visible* worst severity for the same
+        // reason (a snoozed critical shouldn't paint the strip red).
+        let worst = visibleDiagnoses.map(\.severity).max() ?? .ok
         inMemoryHistory.append(TrendPoint(
             capturedAt: Date(),
             memoryPressure: result.snapshot.memoryPressure,
@@ -169,15 +198,18 @@ final class SystemMonitor {
             inMemoryHistory.removeFirst(inMemoryHistory.count - Self.inMemoryHistoryCapacity)
         }
 
-        // Prefer the daemon's history when it has more points than our
-        // in-memory buffer — daemon persists across app restarts, in-memory
-        // doesn't, so the daemon's version reaches further back.
         self.trendHistory = result.history.count > inMemoryHistory.count
             ? result.history
             : inMemoryHistory
 
         self.lastUpdated = Date()
-        notifications.process(result.diagnoses)
+        // Notifications also skip snoozed diagnoses — the user has said
+        // "don't alert me on this" and a critical-firing snoozed rule
+        // shouldn't ping them.
+        let unsnoozed = result.diagnosisContexts
+            .filter { !snoozeStore.isSnoozed($0.diagnosis.title) }
+            .map(\.diagnosis)
+        notifications.process(unsnoozed)
     }
 }
 
@@ -195,4 +227,20 @@ private final class TaskBox: @unchecked Sendable {
     func cancel() {
         lock.withLock { _task?.cancel() }
     }
+}
+
+// MARK: - HeadroomAssessment placeholder for empty state
+
+extension HeadroomAssessment {
+    /// Placeholder for the pre-first-sample state so the UI can render
+    /// something (dimmed via `hasSampledYet`) instead of nothing.
+    static let empty = HeadroomAssessment(
+        availableMemoryBytes: 0,
+        totalMemoryBytes: 0,
+        verdict: .comfortable,
+        headline: "Sampling…",
+        context: "Reading system state.",
+        topHogName: nil,
+        topHogBytes: nil
+    )
 }

@@ -1,19 +1,29 @@
 import SwiftUI
 import WhirrCore
 
-/// A clickable process row. Renders compactly (safety pill + name +
-/// caller-supplied trailing content). Tapping it expands an inline
-/// detail panel underneath; tapping again collapses. Only one row
-/// across the whole menu can be expanded at a time (state lives at
-/// MenuBarView level).
+/// A clickable process row. Renders compactly (safety pill + friendly
+/// name + caller-supplied trailing content). Tapping it expands an
+/// inline detail panel underneath; tapping again collapses. Only one
+/// row across the whole menu can be expanded at a time.
+///
+/// The "friendly name" comes from `ProcessDescriptor` — an app name
+/// resolved from Info.plist or a curated known-name table, so users
+/// see "Google Chrome" rather than "Google Chrome Helper (Renderer)".
 struct ProcessRow<Trailing: View>: View {
     let proc: ProcessSample
     @Binding var expandedPid: Int32?
     let parentLookup: (Int32) -> ProcessSample?
+    /// When true, drop the safety pill and chevron for a tighter row.
+    /// The row is still clickable to expand — we just hide the affordance
+    /// glyph. Row height drops by ~4 pt and horizontal noise drops too.
+    let compactMode: Bool
     @ViewBuilder var trailing: () -> Trailing
 
     private var isExpanded: Bool { expandedPid == proc.pid }
     private var safety: ProcessSafety { ProcessClassifier.classify(proc) }
+    private var description: ProcessDescription {
+        ProcessDescriptor.shared.describe(proc)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -21,24 +31,34 @@ struct ProcessRow<Trailing: View>: View {
                 expandedPid = isExpanded ? nil : proc.pid
             } label: {
                 HStack(spacing: 8) {
-                    SafetyBadge(safety: safety)
-                    Text(proc.name)
+                    if !compactMode {
+                        SafetyBadge(safety: safety)
+                    }
+                    Text(description.friendlyName)
                         .font(.callout)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
                     trailing()
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
+                    if !compactMode {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
+                    }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .help(description.explainer)
 
             if isExpanded {
-                ProcessDetail(proc: proc, safety: safety, parentLookup: parentLookup)
+                ProcessDetail(
+                    proc: proc,
+                    safety: safety,
+                    description: description,
+                    parentLookup: parentLookup
+                )
             }
         }
     }
@@ -47,11 +67,10 @@ struct ProcessRow<Trailing: View>: View {
 private struct ProcessDetail: View {
     let proc: ProcessSample
     let safety: ProcessSafety
+    let description: ProcessDescription
     let parentLookup: (Int32) -> ProcessSample?
-    /// Drives a native confirmationDialog before SIGKILL — same affordance
-    /// the Docker group "Stop all" / "Restart all" actions use. Switched
-    /// from the prior two-click-within-3s pattern for consistency and
-    /// VoiceOver friendliness.
+    /// Drives a native confirmationDialog before SIGKILL. Consistent
+    /// with the Docker "Stop all" / "Restart all" affordances.
     @State private var showForceQuitConfirm = false
 
     private var parent: ProcessSample? {
@@ -61,10 +80,32 @@ private struct ProcessDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(safety.advice)
-                .font(.caption)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
+            // ELI5 first — "This is Slack, the chat app…" — then the
+            // safety-oriented advice ("safe to Cmd-Q") beneath. The
+            // ordering matches how someone actually reads: what is it,
+            // then what should I do about it.
+            VStack(alignment: .leading, spacing: 4) {
+                if description.friendlyName != proc.name {
+                    // Show the raw process name so users understand
+                    // where the friendly label came from — otherwise
+                    // the disambiguation feels like magic.
+                    Text("This is **\(description.friendlyName)** (process: `\(proc.name)`).")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                } else {
+                    Text("**\(description.friendlyName)**")
+                        .font(.caption)
+                        .foregroundStyle(.primary)
+                }
+                Text(description.explainer)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(safety.advice)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             VStack(alignment: .leading, spacing: 3) {
                 detailRow("pid", "\(proc.pid)")

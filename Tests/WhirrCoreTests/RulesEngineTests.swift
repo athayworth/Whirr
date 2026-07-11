@@ -14,7 +14,8 @@ final class RulesEngineTests: XCTestCase {
         thermal: ThermalState = .nominal,
         load: LoadAverage = LoadAverage(oneMinute: 1, fiveMinute: 1, fifteenMinute: 1),
         diskFree: UInt64 = 500 * .gb,
-        diskTotal: UInt64 = 1000 * .gb
+        diskTotal: UInt64 = 1000 * .gb,
+        pageInsPerSec: Double = 0
     ) -> SystemSnapshot {
         SystemSnapshot(
             memoryUsedBytes: used,
@@ -24,7 +25,8 @@ final class RulesEngineTests: XCTestCase {
             thermalState: thermal,
             loadAverage: load,
             rootDiskFreeBytes: diskFree,
-            rootDiskTotalBytes: diskTotal
+            rootDiskTotalBytes: diskTotal,
+            pageInsPerSecond: pageInsPerSec
         )
     }
 
@@ -79,32 +81,58 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertEqual(result.first?.severity, .warning)
     }
 
-    // MARK: - SwapThrashingRule
+    // MARK: - SwapThrashingRule (split: active-paging vs volume-only)
 
     func testSwapBelowThresholdDoesNotFire() {
         let result = engine.evaluate(snapshot: snapshot(pressure: .warning, swap: 1 * .gb), processes: [])
-        XCTAssertFalse(titles(result).contains("System is swapping heavily"))
+        let swapTitles: Set<String> = ["System is actively paging", "Swap is holding old pages"]
+        XCTAssertTrue(titles(result).allSatisfy { !swapTitles.contains($0) })
     }
 
-    func testSwapWarningFiresAt3GB() {
-        let result = engine.evaluate(snapshot: snapshot(pressure: .warning, swap: 3 * .gb), processes: [])
-        let swap = result.first { $0.title == "System is swapping heavily" }
+    func testSwapVolumeOnlyEmitsSoftenedTitleAtWarning() {
+        // 3 GB of swap, memory pressure elevated, but no page-in traffic
+        // → we say "holding old pages" (warning) rather than the alarming
+        // "actively paging" language. This is the case the user was
+        // seeing perpetually before the split.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .warning, swap: 3 * .gb, pageInsPerSec: 0),
+            processes: []
+        )
+        let swap = result.first { $0.title == "Swap is holding old pages" }
         XCTAssertEqual(swap?.severity, .warning)
+        XCTAssertFalse(titles(result).contains("System is actively paging"))
     }
 
-    func testSwapCriticalFiresAt8GB() {
-        let result = engine.evaluate(snapshot: snapshot(pressure: .critical, swap: 8 * .gb), processes: [])
-        let swap = result.first { $0.title == "System is swapping heavily" }
+    func testActivePagingCriticalAt8GBWithHighPageInRate() {
+        // 8 GB in swap + memory critical + real page-in traffic → the
+        // full "actively paging" story, escalated to critical.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .critical, swap: 8 * .gb, pageInsPerSec: 2000),
+            processes: []
+        )
+        let swap = result.first { $0.title == "System is actively paging" }
         XCTAssertEqual(swap?.severity, .critical)
     }
 
+    func testActivePagingIsWarningBelowCriticalGB() {
+        // Real thrashing but only 3 GB used — still warning, not critical.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .warning, swap: 3 * .gb, pageInsPerSec: 2000),
+            processes: []
+        )
+        let swap = result.first { $0.title == "System is actively paging" }
+        XCTAssertEqual(swap?.severity, .warning)
+    }
+
     func testSwapStaysSilentWhenPressureNormal() {
-        // Real-world case: a heavy session ended, memory pressure has eased
-        // back to normal, but macOS still holds 13 GB of compressed pages
-        // in swap. The user feels fine right now — the rule shouldn't
-        // perpetually flag critical because of historical pressure.
-        let result = engine.evaluate(snapshot: snapshot(pressure: .normal, swap: 13 * .gb), processes: [])
-        XCTAssertFalse(titles(result).contains("System is swapping heavily"))
+        // The classic "heavy session ended, macOS still holds compressed
+        // pages" case. Neither title fires — the machine is fine right now.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .normal, swap: 13 * .gb),
+            processes: []
+        )
+        XCTAssertFalse(titles(result).contains("System is actively paging"))
+        XCTAssertFalse(titles(result).contains("Swap is holding old pages"))
     }
 
     // MARK: - ThermalThrottleRule
@@ -181,23 +209,27 @@ final class RulesEngineTests: XCTestCase {
     }
 
     // MARK: - HighDiskIORule
+    //
+    // Thresholds were raised (50/200 → 200/800 MB/s) to be honest about
+    // modern NVMe SSDs. Below the new floor: no fire. In-between: warning.
+    // Well past critical: critical.
 
     func testHighDiskIODoesNotFireBelowThreshold() {
-        let proc = process(name: "Photos", readBps: 40 * .mb)
+        let proc = process(name: "Photos", readBps: 150 * .mb)
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         XCTAssertFalse(titles(result).contains("Disk is busy"))
     }
 
-    func testHighDiskIOWarningFiresAt60MBps() {
-        let proc = process(name: "Photos", readBps: 60 * .mb)
+    func testHighDiskIOWarningFiresAt250MBps() {
+        let proc = process(name: "Photos", readBps: 250 * .mb)
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         let diag = result.first { $0.title == "Disk is busy" }
         XCTAssertEqual(diag?.severity, .warning)
         XCTAssertTrue(diag?.detail.contains("reading") ?? false)
     }
 
-    func testHighDiskIOCriticalFiresAt250MBps() {
-        let proc = process(name: "ffmpeg", writeBps: 250 * .mb)
+    func testHighDiskIOCriticalFiresAt900MBps() {
+        let proc = process(name: "ffmpeg", writeBps: 900 * .mb)
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         let diag = result.first { $0.title == "Disk is busy" }
         XCTAssertEqual(diag?.severity, .critical)
@@ -206,7 +238,7 @@ final class RulesEngineTests: XCTestCase {
 
     func testHighDiskIOSkipsBackupProcesses() {
         // BackupHoggingRule owns these — HighDiskIORule shouldn't double-fire.
-        let proc = process(name: "bztransmit", readBps: 200 * .mb)
+        let proc = process(name: "bztransmit", readBps: 400 * .mb)
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         XCTAssertFalse(titles(result).contains("Disk is busy"))
         XCTAssertTrue(titles(result).contains("Backup is using your system"))
@@ -214,9 +246,9 @@ final class RulesEngineTests: XCTestCase {
 
     func testHighDiskIOPicksHeaviestProcess() {
         let processes = [
-            process(pid: 1, name: "lightweight", readBps: 60 * .mb),
-            process(pid: 2, name: "heaviest", readBps: 300 * .mb),
-            process(pid: 3, name: "middle", readBps: 100 * .mb)
+            process(pid: 1, name: "lightweight", readBps: 250 * .mb),
+            process(pid: 2, name: "heaviest", readBps: 600 * .mb),
+            process(pid: 3, name: "middle", readBps: 400 * .mb)
         ]
         let result = engine.evaluate(snapshot: snapshot(), processes: processes)
         let diag = result.first { $0.title == "Disk is busy" }
@@ -368,8 +400,12 @@ final class RulesEngineTests: XCTestCase {
     }
 
     func testMemorySwapSpiralNarrativeFires() {
+        // Needs *actively-paging* swap now (post-page-in-rate split), not
+        // just volume — that's the whole point of the honesty fix. Add a
+        // high page-in rate so the underlying swap rule emits the
+        // active-paging title the spiral narrative depends on.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 6 * .gb),
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, pageInsPerSec: 1500),
             processes: [process(name: "Arc", mem: 8 * .gb)]
         )
         let narrative = result.first { $0.title == "Memory + swap death spiral" }
@@ -378,11 +414,22 @@ final class RulesEngineTests: XCTestCase {
                       "Expected top memory hog named in narrative")
     }
 
+    func testMemorySwapSpiralDoesNotFireOnVolumeAloneAfterHeavySession() {
+        // The core dishonesty fix: swap sitting at 6 GB with memory
+        // pressure critical but no active paging should NOT be called
+        // a "death spiral." No page-in traffic = no user-felt cost.
+        let result = engine.evaluate(
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, pageInsPerSec: 0),
+            processes: [process(name: "Arc", mem: 8 * .gb)]
+        )
+        XCTAssertFalse(titles(result).contains("Memory + swap death spiral"))
+    }
+
     func testMemorySwapSpiralYieldsToBackupNarrative() {
         // When both narratives qualify, the more specific Backup story wins —
         // they shouldn't both fire and double up the message.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 6 * .gb),
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, pageInsPerSec: 1500),
             processes: [process(name: "bztransmit", cpu: 8)]
         )
         let narratives = result.filter { $0.kind == .narrative }
@@ -437,9 +484,10 @@ final class RulesEngineTests: XCTestCase {
     }
 
     func testDiskMemoryContentionNarrativeFires() {
+        // Raise the disk I/O for this test above the new 200 MB/s floor.
         let result = engine.evaluate(
             snapshot: snapshot(pressure: .warning),
-            processes: [process(name: "ffmpeg", readBps: 80 * .mb)]
+            processes: [process(name: "ffmpeg", readBps: 300 * .mb)]
         )
         let narrative = result.first { $0.title == "Disk and memory are fighting for the same SSD" }
         XCTAssertNotNil(narrative)
@@ -448,9 +496,10 @@ final class RulesEngineTests: XCTestCase {
 
     func testDiskMemoryContentionYieldsToMemorySwapSpiral() {
         // When both could fire, the more dire memory+swap story wins.
+        // Add page-in traffic so the spiral qualifies under the new gate.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 6 * .gb),
-            processes: [process(name: "ffmpeg", readBps: 80 * .mb, writeBps: 0)]
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, pageInsPerSec: 1500),
+            processes: [process(name: "ffmpeg", readBps: 300 * .mb, writeBps: 0)]
         )
         let narratives = result.filter { $0.kind == .narrative }
         XCTAssertEqual(narratives.count, 1)

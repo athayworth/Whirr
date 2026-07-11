@@ -168,10 +168,11 @@ guard opts.once || validate(outputPath: opts.outputPath) else {
 }
 
 let processSampler = ProcessSampler()
+let systemSampler = SystemSampler()
 let rules = RulesEngine()
 
 func takeSnapshot() -> SnapshotPayload {
-    let system = SystemSampler.sample()
+    let system = systemSampler.sample()
     let processes = processSampler.sample()
     let diagnoses = rules.evaluate(snapshot: system, processes: processes)
     return SnapshotPayload(

@@ -14,6 +14,9 @@ enum Preferences {
         static let samplingIntervalSeconds = "preferences.samplingIntervalSeconds"
         static let notificationsEnabled    = "preferences.notificationsEnabled"
         static let notificationCooldownSeconds = "preferences.notificationCooldownSeconds"
+        static let notifyOnRecovery        = "preferences.notifyOnRecovery"
+        static let compactMode             = "preferences.compactMode"
+        static let hasCompletedOnboarding  = "preferences.hasCompletedOnboarding"
     }
 
     // MARK: - Sampling cadence
@@ -54,6 +57,33 @@ enum Preferences {
         let stored = UserDefaults.standard.double(forKey: Key.notificationCooldownSeconds)
         guard stored > 0 else { return defaultNotificationCooldownSeconds }
         return stored.clamped(to: minNotificationCooldownSeconds...maxNotificationCooldownSeconds)
+    }
+
+    // MARK: - Recovery pings
+
+    /// Post an "all clear" notification when a previously-critical
+    /// diagnosis resolves. Off by default — some users find these
+    /// unnecessary, and the escalation pings alone are informative.
+    /// On for users who want to know their machine is safe again
+    /// without checking the menu.
+    static let defaultNotifyOnRecovery = false
+
+    static var notifyOnRecovery: Bool {
+        UserDefaults.standard.object(forKey: Key.notifyOnRecovery) as? Bool
+            ?? defaultNotifyOnRecovery
+    }
+
+    // MARK: - Density
+
+    /// Compact vs detailed menu rendering. Default `false` (detailed) so
+    /// existing users don't see a UI change without opting in. Compact
+    /// mode drops duration/trend badges, tightens process rows, and caps
+    /// the Top-processes list to 4 rows — meaningfully shorter menu.
+    static let defaultCompactMode = false
+
+    static var compactMode: Bool {
+        UserDefaults.standard.object(forKey: Key.compactMode) as? Bool
+            ?? defaultCompactMode
     }
 }
 

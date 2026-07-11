@@ -2,28 +2,45 @@ import Foundation
 
 /// One tick of "what's going on" data. Either freshly sampled in-process
 /// or read from the daemon's snapshot file, then run through the same
-/// rules engine either way.
+/// rules engine either way — plus headroom + duration-annotated contexts
+/// + Harbr project attribution, all layered on top by the pipeline itself.
 public actor SamplingPipeline {
     public struct Result: Sendable {
         public let snapshot: SystemSnapshot
         public let processes: [ProcessSample]
-        public let diagnoses: [Diagnosis]
+        /// Per-diagnosis "on for X, trend Y" annotation. Callers that
+        /// don't need duration use `diagnoses`.
+        public let diagnosisContexts: [DiagnosisContext]
+        /// "Can I keep going?" summary — one line the UI puts at top of
+        /// the menu, above the diagnoses list.
+        public let headroom: HeadroomAssessment
         public let history: [TrendPoint]
+        /// Harbr project statuses. Empty when Harbr's config isn't
+        /// present (Harbr not installed, or user hasn't added any
+        /// projects yet).
+        public let harbrStatuses: [HarbrProjectStatus]
         public let source: Source
 
         public enum Source: Sendable { case daemon, inProcess }
 
+        /// Convenience: just the diagnoses, without the context wrapper.
+        public var diagnoses: [Diagnosis] { diagnosisContexts.map(\.diagnosis) }
+
         public init(
             snapshot: SystemSnapshot,
             processes: [ProcessSample],
-            diagnoses: [Diagnosis],
+            diagnosisContexts: [DiagnosisContext],
+            headroom: HeadroomAssessment,
             history: [TrendPoint],
+            harbrStatuses: [HarbrProjectStatus],
             source: Source
         ) {
             self.snapshot = snapshot
             self.processes = processes
-            self.diagnoses = diagnoses
+            self.diagnosisContexts = diagnosisContexts
+            self.headroom = headroom
             self.history = history
+            self.harbrStatuses = harbrStatuses
             self.source = source
         }
     }
@@ -45,7 +62,27 @@ public actor SamplingPipeline {
     private let clock: @Sendable () -> Date
 
     private let processSampler = ProcessSampler()
+    private let systemSampler = SystemSampler()
     private let rules: RulesEngine
+    private var durationTracker = DiagnosisDurationTracker()
+    private let harbrConfigReader: HarbrConfigReader
+    /// Persisted log of closed incidents — read by the Insights charts
+    /// in Settings. Written on rising-edge → falling-edge transitions
+    /// via `DiagnosisDurationTracker.annotate` returning `closedIncidents`.
+    public let incidentLog: IncidentLog
+
+    /// Port-listening cache. Refreshed every N ticks by re-probing every
+    /// known Harbr port; between refreshes we use the last-known value.
+    /// This keeps the tick cost bounded (at most ~1 second every N ticks
+    /// worst-case, spread across ports one-by-one).
+    private var portListeningCache: [Int: Bool] = [:]
+    private var ticksUntilPortRefresh: Int = 0
+    /// Number of ticks between full port re-probes. At the default 3 s
+    /// tick, this is a ~15-second cadence — dev servers don't come up
+    /// or shut down inside a 15-second window often enough for the
+    /// finer granularity to matter.
+    private let portProbeEveryTicks: Int = 5
+
     private let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
@@ -57,30 +94,32 @@ public actor SamplingPipeline {
         historyPath: String = SamplingPipeline.defaultHistoryPath,
         freshnessWindow: TimeInterval = SamplingPipeline.defaultFreshnessWindow,
         clock: @Sendable @escaping () -> Date = { Date() },
-        rulesConfig: RulesConfig = .default
+        rulesConfig: RulesConfig = .default,
+        harbrConfigReader: HarbrConfigReader = HarbrConfigReader(),
+        incidentLog: IncidentLog = IncidentLog()
     ) {
         self.snapshotPath = snapshotPath
         self.historyPath = historyPath
         self.freshnessWindow = freshnessWindow
         self.clock = clock
         self.rules = RulesEngine(config: rulesConfig)
+        self.harbrConfigReader = harbrConfigReader
+        self.incidentLog = incidentLog
     }
 
     public func tick(containers: [DockerContainer] = []) -> Result {
         if let fromDaemon = readDaemonSnapshot(containers: containers) {
             return fromDaemon
         }
-        let snapshot = SystemSampler.sample()
+        let snapshot = systemSampler.sample()
         let processes = processSampler.sample()
         let diagnoses = rules.evaluate(
             snapshot: snapshot,
             processes: processes,
-            dockerContainers: containers
+            dockerContainers: containers,
+            describer: { ProcessDescriptor.shared.friendlyName(for: $0) }
         )
-        // No daemon means no shared history file — return what we have
-        // (just the current point isn't useful, so an empty array signals
-        // "history not available" to the UI).
-        return Result(
+        return buildResult(
             snapshot: snapshot,
             processes: processes,
             diagnoses: diagnoses,
@@ -99,19 +138,80 @@ public actor SamplingPipeline {
         // than trusting payload.diagnoses. The daemon's rule set is whatever
         // shipped with the installed binary, which may be stale relative to
         // the app's; this way rule changes ship with the next app build.
-        // Container stats come from the menu bar (user-mode); pass them in.
         let diagnoses = rules.evaluate(
             snapshot: payload.snapshot,
             processes: payload.processes,
             dockerContainers: containers
         )
-        return Result(
+        return buildResult(
             snapshot: payload.snapshot,
             processes: payload.processes,
             diagnoses: diagnoses,
             history: readDaemonHistory(),
             source: .daemon
         )
+    }
+
+    private func buildResult(
+        snapshot: SystemSnapshot,
+        processes: [ProcessSample],
+        diagnoses: [Diagnosis],
+        history: [TrendPoint],
+        source: Result.Source
+    ) -> Result {
+        let now = clock()
+        let annotation = durationTracker.annotate(diagnoses, now: now)
+        // Persist any incidents that just closed. The log handles its
+        // own retention + purge; we don't need to bound writes here.
+        for incident in annotation.closedIncidents {
+            incidentLog.record(incident)
+        }
+        // Pass the swap rule's page-in threshold to the headroom
+        // assessor so a single knob controls "actively paging" across
+        // both the rule engine and the headline verdict.
+        let headroom = HeadroomAssessor.assess(
+            snapshot: snapshot,
+            processes: processes,
+            pageInThreshold: rules.config.swapThrashing.thrashingPageInsPerSecond
+        )
+        let harbrStatuses = evaluateHarbr(processes: processes)
+        return Result(
+            snapshot: snapshot,
+            processes: processes,
+            diagnosisContexts: annotation.contexts,
+            headroom: headroom,
+            history: history,
+            harbrStatuses: harbrStatuses,
+            source: source
+        )
+    }
+
+    private func evaluateHarbr(processes: [ProcessSample]) -> [HarbrProjectStatus] {
+        let projects = harbrConfigReader.projects()
+        guard !projects.isEmpty else {
+            portListeningCache.removeAll(keepingCapacity: false)
+            ticksUntilPortRefresh = 0
+            return []
+        }
+        refreshPortCacheIfDue(for: projects)
+        return HarbrAttribution.statuses(
+            projects: projects,
+            processes: processes,
+            portListening: { [portListeningCache] port in portListeningCache[port] ?? false }
+        )
+    }
+
+    private func refreshPortCacheIfDue(for projects: [HarbrProject]) {
+        if ticksUntilPortRefresh > 0 {
+            ticksUntilPortRefresh -= 1
+            return
+        }
+        var next: [Int: Bool] = [:]
+        for project in projects {
+            next[project.port] = HarbrAttribution.defaultPortListening(project.port)
+        }
+        portListeningCache = next
+        ticksUntilPortRefresh = portProbeEveryTicks
     }
 
     private func readDaemonHistory() -> [TrendPoint] {

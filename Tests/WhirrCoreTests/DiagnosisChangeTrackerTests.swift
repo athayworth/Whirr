@@ -71,6 +71,26 @@ final class DiagnosisChangeTrackerTests: XCTestCase {
         XCTAssertEqual(result, [])
     }
 
+    // MARK: - Recovery detection
+
+    func testNewlyClearedReportsPreviouslyCriticalTitlesNoLongerFiring() {
+        // First tick: A and B critical → both recorded as previous.
+        var tracker = DiagnosisChangeTracker()
+        _ = tracker.newlyCritical(in: [diagnosis("A", .critical), diagnosis("B", .critical)])
+        // Second tick: A cleared, B still critical → newlyCleared should
+        // report A. Order matters: newlyCleared must be read BEFORE
+        // newlyCritical mutates previousCriticalKeys.
+        let cleared = tracker.newlyCleared(in: [diagnosis("B", .critical)])
+        XCTAssertEqual(cleared, ["A"])
+    }
+
+    func testNewlyClearedIsEmptyWhenNothingResolved() {
+        var tracker = DiagnosisChangeTracker()
+        _ = tracker.newlyCritical(in: [diagnosis("A", .critical)])
+        let cleared = tracker.newlyCleared(in: [diagnosis("A", .critical)])
+        XCTAssertEqual(cleared, [])
+    }
+
     func testDifferentDiagnosesTrackedIndependently() {
         var tracker = DiagnosisChangeTracker()
         let first = tracker.newlyCritical(in: [diagnosis("A", .critical)])

@@ -12,13 +12,15 @@ public struct RulesEngine: Sendable {
     public func evaluate(
         snapshot: SystemSnapshot,
         processes: [ProcessSample],
-        dockerContainers: [DockerContainer] = []
+        dockerContainers: [DockerContainer] = [],
+        describer: @escaping @Sendable (ProcessSample) -> String = { $0.name }
     ) -> [Diagnosis] {
         let core = CoreContext(
             snapshot: snapshot,
             processes: processes,
             coreCount: ProcessInfo.processInfo.activeProcessorCount,
-            dockerContainers: dockerContainers
+            dockerContainers: dockerContainers,
+            describer: describer
         )
 
         var standalone: [Diagnosis] = []
@@ -88,23 +90,38 @@ public struct CoreContext {
     public let processes: [ProcessSample]
     public let coreCount: Int
     public let dockerContainers: [DockerContainer]
+    /// Turns a `ProcessSample` into the name we should show the user.
+    /// Default = raw process name so `RulesEngine.evaluate()` callers
+    /// that don't pass a describer keep the prior behavior; the menu
+    /// bar's pipeline passes `ProcessDescriptor.shared.friendlyName` so
+    /// narratives say "Google Chrome" rather than "Google Chrome Helper
+    /// (Renderer)".
+    public let describer: @Sendable (ProcessSample) -> String
 
     public init(
         snapshot: SystemSnapshot,
         processes: [ProcessSample],
         coreCount: Int,
-        dockerContainers: [DockerContainer] = []
+        dockerContainers: [DockerContainer] = [],
+        describer: @escaping @Sendable (ProcessSample) -> String = { $0.name }
     ) {
         self.snapshot = snapshot
         self.processes = processes
         self.coreCount = coreCount
         self.dockerContainers = dockerContainers
+        self.describer = describer
     }
 
     var topProcess: ProcessSample? { processes.first }
 
     func processes(named names: Set<String>) -> [ProcessSample] {
         processes.filter { names.contains($0.name) }
+    }
+
+    /// Convenience: friendly-name resolution + fallback to a default.
+    func displayName(_ proc: ProcessSample?, fallback: String = "a process") -> String {
+        guard let proc else { return fallback }
+        return describer(proc)
     }
 }
 
@@ -125,6 +142,31 @@ private extension Array where Element == Diagnosis {
     func first(withTitle title: String) -> Diagnosis? {
         first { $0.title == title }
     }
+    /// Match by any of the given titles — needed since the swap rule can
+    /// emit either "System is actively paging" (thrashing) or "Swap is
+    /// holding old pages" (volume-only). Narrative rules that just care
+    /// "is swap in the mix" use this; the death-spiral narrative uses
+    /// the specific active-paging title alone.
+    func first(withAnyTitle titles: [String]) -> Diagnosis? {
+        let set = Set(titles)
+        return first { set.contains($0.title) }
+    }
+}
+
+/// Rule-emitted title constants that narrative rules cross-reference.
+/// Kept as constants so a rename in one place produces a compile error
+/// at every downstream match, not a silent behavioral regression.
+enum DiagnosisTitles {
+    static let memoryTight = "Memory is tight"
+    static let memorySaturated = "Memory is saturated"
+    static let swapActivelyPaging = "System is actively paging"
+    static let swapVolumeOnly = "Swap is holding old pages"
+    static let anySwap = [swapActivelyPaging, swapVolumeOnly]
+    static let thermalWarning = "CPU is throttling from heat"
+    static let thermalCritical = "CPU is critically hot"
+    static let backupUsing = "Backup is using your system"
+    static let diskBusy = "Disk is busy"
+    static let runawaySuffix = "has been pegging CPU"
 }
 
 // MARK: - Rules
@@ -152,23 +194,50 @@ struct MemoryPressureRule: Rule {
     }
 }
 
+/// Distinguishes swap *volume* (macOS is holding pages on disk — happens
+/// after any heavy session and stays put for hours) from swap *thrashing*
+/// (macOS is actively paging in/out — the thing that actually slows the
+/// system down). Prior versions conflated the two and cried wolf whenever
+/// swap sat at ~2 GB after a heavy build. Now we say only what's true:
+/// - active page-in rate → "actively thrashing" (real slowdown)
+/// - volume alone → "using swap" (mildly informational)
 struct SwapThrashingRule: Rule {
     let config: SwapThrashingRuleConfig
     var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         let gb = Double(ctx.snapshot.swapUsedBytes) / 1_073_741_824
         guard gb >= config.warningGB else { return nil }
-        // Total-swap-used is a lagging indicator: macOS holds compressed
-        // pages on disk long after the peak that produced them. If memory
-        // pressure has eased back to .normal, the disk-as-RAM story isn't
-        // happening right now — claiming "swapping heavily" would be a
-        // perpetual red flag after every heavy session. Stay silent until
-        // pressure rises again, which is when the user actually feels it.
+        // Same gate as before — no point flagging stale compressed pages
+        // when kernel says memory pressure is fine.
         guard ctx.snapshot.memoryPressure != .normal else { return nil }
+
+        let rate = ctx.snapshot.pageInsPerSecond
+        let isActivelyThrashing = rate >= config.thrashingPageInsPerSecond
+
+        if isActivelyThrashing {
+            // Actual thrashing: the paging is happening *now* and the user
+            // is feeling it. This deserves the escalated language.
+            let severity: Severity = gb >= config.criticalGB ? .critical : .warning
+            return Diagnosis(
+                title: "System is actively paging",
+                detail: String(
+                    format: "%.1f GB in swap and macOS is reading pages back at ~%d/s. This is what makes the machine feel sluggish — close something to reduce memory pressure.",
+                    gb, Int(rate)
+                ),
+                severity: severity
+            )
+        }
+
+        // Volume-only: pages are on disk but not moving. Informational,
+        // not alarming — and never critical, because the user isn't
+        // currently paying the disk cost that would justify "critical."
         return Diagnosis(
-            title: "System is swapping heavily",
-            detail: String(format: "%.1f GB of swap in use — disk is being treated as RAM, which is much slower.", gb),
-            severity: gb >= config.criticalGB ? .critical : .warning
+            title: "Swap is holding old pages",
+            detail: String(
+                format: "%.1f GB of memory is parked on disk, but macOS isn't actively moving pages in and out right now. This is a normal after-effect of a memory-heavy session — the number will drop as you close apps.",
+                gb
+            ),
+            severity: .warning
         )
     }
 }
@@ -350,25 +419,30 @@ struct RunawayProcessRule: Rule {
             .sorted { $0.cpuPercent > $1.cpuPercent }
         guard let worst = sustained.first else { return nil }
 
-        let identity = displayCommandLine(for: worst)
+        let friendly = ctx.describer(worst)
+        let identity = displayCommandLine(for: worst, friendly: friendly)
         let durationSeconds = worst.sustainedHighCpuSamples * Self.assumedIntervalSeconds
         let severity: Severity =
             (worst.cpuPercent >= 200 || worst.sustainedHighCpuSamples >= config.extendedSustainedSamples)
             ? .critical : .warning
         return Diagnosis(
-            title: "\(worst.name) has been pegging CPU",
+            title: "\(friendly) has been pegging CPU",
             detail: String(
                 format: "%@ has been over 60%% CPU for the last %d seconds — currently %.0f%%, pid %d. If you weren't expecting this, the process may be stuck.",
                 identity, durationSeconds, worst.cpuPercent, worst.pid
             ),
             severity: severity,
-            culprits: [worst.name]
+            culprits: [friendly]
         )
     }
 
-    private func displayCommandLine(for proc: ProcessSample) -> String {
+    /// Detail-line identity: prefer the full command line when it adds
+    /// info (paths, script name), fall back to the friendly display
+    /// name. Keeps the row header short (title = friendly name) and
+    /// the detail rich (command line where useful).
+    private func displayCommandLine(for proc: ProcessSample, friendly: String) -> String {
         guard let cmd = proc.commandLine, !cmd.isEmpty, cmd != proc.name else {
-            return proc.name
+            return friendly
         }
         return cmd
     }
@@ -385,11 +459,11 @@ struct BackupChokingForegroundNarrative: NarrativeRule {
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         guard let backup = diagnoses.first(withTitle: "Backup is using your system") else { return nil }
 
-        let memoryTight = diagnoses.first(withTitle: "Memory is tight")
-            ?? diagnoses.first(withTitle: "Memory is saturated")
-        let swapping = diagnoses.first(withTitle: "System is swapping heavily")
-        let thermal = diagnoses.first(withTitle: "CPU is throttling from heat")
-            ?? diagnoses.first(withTitle: "CPU is critically hot")
+        let memoryTight = diagnoses.first(withTitle: DiagnosisTitles.memoryTight)
+            ?? diagnoses.first(withTitle: DiagnosisTitles.memorySaturated)
+        let swapping = diagnoses.first(withAnyTitle: DiagnosisTitles.anySwap)
+        let thermal = diagnoses.first(withTitle: DiagnosisTitles.thermalWarning)
+            ?? diagnoses.first(withTitle: DiagnosisTitles.thermalCritical)
 
         let secondarySignals = [memoryTight, swapping, thermal].compactMap { $0 }
         guard !secondarySignals.isEmpty else { return nil }
@@ -408,7 +482,10 @@ struct BackupChokingForegroundNarrative: NarrativeRule {
                 + "Backup reads compete with everything else on the SSD — pausing it is the fastest fix.",
             severity: severity,
             culprits: backup.culprits,
-            kind: .narrative
+            kind: .narrative,
+            // Backup + the secondary signals it references are already
+            // named in the detail line; hide their standalones.
+            subsumes: [DiagnosisTitles.backupUsing] + secondarySignals.map(\.title)
         )
     }
 }
@@ -420,10 +497,10 @@ struct ThermalThrottleAmplifierNarrative: NarrativeRule {
     let config: NarrativeToggle
     var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
-        let thermal = diagnoses.first(withTitle: "CPU is throttling from heat")
-            ?? diagnoses.first(withTitle: "CPU is critically hot")
+        let thermal = diagnoses.first(withTitle: DiagnosisTitles.thermalWarning)
+            ?? diagnoses.first(withTitle: DiagnosisTitles.thermalCritical)
         guard let thermal else { return nil }
-        let runaway = diagnoses.first { $0.title.hasSuffix("has been pegging CPU") }
+        let runaway = diagnoses.first { $0.title.hasSuffix(DiagnosisTitles.runawaySuffix) }
         guard let runaway else { return nil }
 
         let culprit = runaway.culprits.first ?? "the top process"
@@ -448,17 +525,17 @@ struct DiskMemoryContentionNarrative: NarrativeRule {
     var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         // Don't compete with more specific narratives: skip when Backup is
-        // active, or when the underlying memory+swap condition that drives
-        // MemorySwapSpiralNarrative is present.
-        if diagnoses.first(withTitle: "Backup is using your system") != nil { return nil }
-        let memorySaturatedAndSwapping =
-            diagnoses.first(withTitle: "Memory is saturated") != nil
-            && diagnoses.first(withTitle: "System is swapping heavily") != nil
-        if memorySaturatedAndSwapping { return nil }
+        // active, or when active-paging is happening (MemorySwapSpiral
+        // covers the death-spiral case, and it's the strictly-worse story).
+        if diagnoses.first(withTitle: DiagnosisTitles.backupUsing) != nil { return nil }
+        let activelyPagingUnderSaturation =
+            diagnoses.first(withTitle: DiagnosisTitles.memorySaturated) != nil
+            && diagnoses.first(withTitle: DiagnosisTitles.swapActivelyPaging) != nil
+        if activelyPagingUnderSaturation { return nil }
 
-        guard let disk = diagnoses.first(withTitle: "Disk is busy") else { return nil }
-        let memoryTight = diagnoses.first(withTitle: "Memory is tight")
-            ?? diagnoses.first(withTitle: "Memory is saturated")
+        guard let disk = diagnoses.first(withTitle: DiagnosisTitles.diskBusy) else { return nil }
+        let memoryTight = diagnoses.first(withTitle: DiagnosisTitles.memoryTight)
+            ?? diagnoses.first(withTitle: DiagnosisTitles.memorySaturated)
         guard let memoryTight else { return nil }
 
         let culprit = disk.culprits.first ?? "a process"
@@ -468,7 +545,11 @@ struct DiskMemoryContentionNarrative: NarrativeRule {
                 + "Closing \(culprit) or freeing RAM (either one) breaks the contention.",
             severity: max(disk.severity, memoryTight.severity),
             culprits: disk.culprits,
-            kind: .narrative
+            kind: .narrative,
+            // Both underlying rows are already named in this narrative
+            // (disk-busy process + memory pressure). Suppress the
+            // duplicates.
+            subsumes: [DiagnosisTitles.diskBusy, DiagnosisTitles.memoryTight, DiagnosisTitles.memorySaturated]
         )
     }
 }
@@ -480,12 +561,15 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
     let config: NarrativeToggle
     var isEnabled: Bool { config.enabled }
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
-        let saturated = diagnoses.first(withTitle: "Memory is saturated")
-        let swapping = diagnoses.first(withTitle: "System is swapping heavily")
-        guard saturated != nil, swapping != nil else { return nil }
+        let saturated = diagnoses.first(withTitle: DiagnosisTitles.memorySaturated)
+        // Only the *actively-paging* variant qualifies as a spiral. Volume
+        // alone (post-heavy-session compressed pages sitting on disk) is
+        // not a death spiral — no page-in traffic means no user-felt cost.
+        let activelyPaging = diagnoses.first(withTitle: DiagnosisTitles.swapActivelyPaging)
+        guard saturated != nil, activelyPaging != nil else { return nil }
 
         // Don't compete with BackupChokingForegroundNarrative — it's a more specific story.
-        if diagnoses.first(withTitle: "Backup is using your system") != nil { return nil }
+        if diagnoses.first(withTitle: DiagnosisTitles.backupUsing) != nil { return nil }
 
         let topMemoryHog = ctx.processes
             .sorted { $0.memoryBytes > $1.memoryBytes }
@@ -494,7 +578,7 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
         if let hog = topMemoryHog, hog.memoryBytes > 0 {
             suggestion = String(
                 format: "Top memory user is %@ at %@ — closing it (or its tabs/files) is the fastest win.",
-                hog.name, formatBytes(hog.memoryBytes)
+                ctx.describer(hog), formatBytes(hog.memoryBytes)
             )
         } else {
             suggestion = "Quitting unused apps is the only real fix — adding more swap just makes the disk read more."
@@ -506,8 +590,12 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
             title: "Memory + swap death spiral",
             detail: "RAM is full and macOS is paging hard to disk. \(suggestion)",
             severity: .critical,
-            culprits: topMemoryHog.map { [$0.name] } ?? [],
-            kind: .narrative
+            culprits: topMemoryHog.map { [ctx.describer($0)] } ?? [],
+            kind: .narrative,
+            // The narrative already says "RAM is full and macOS is
+            // paging" — surfacing the two underlying standalone rows
+            // beneath it triples the count without adding information.
+            subsumes: [DiagnosisTitles.memorySaturated, DiagnosisTitles.swapActivelyPaging]
         )
     }
 }
@@ -712,14 +800,15 @@ struct MemoryLeakNarrative: NarrativeRule {
         let deltaGB = Double(worst.delta) / 1_073_741_824
 
         let severity: Severity = worst.delta >= critBytes ? .critical : .warning
+        let name = ctx.describer(worst.proc)
         return Diagnosis(
-            title: "\(worst.proc.name) memory has been growing",
+            title: "\(name) memory has been growing",
             detail: String(
                 format: "%@ went from %.1f GB to %.1f GB (+%.1f GB) in the last 10 minutes. This is the leak pattern — restarting it would recover that memory.",
-                worst.proc.name, formerGB, currentGB, deltaGB
+                name, formerGB, currentGB, deltaGB
             ),
             severity: severity,
-            culprits: [worst.proc.name],
+            culprits: [name],
             kind: .narrative
         )
     }
@@ -770,7 +859,7 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
             * Self.assumedIntervalSeconds / 60
 
         let pieces = topThree.map { proc -> String in
-            "\(proc.name) (\(formatMemory(proc.memoryBytes)))"
+            "\(ctx.describer(proc)) (\(formatMemory(proc.memoryBytes)))"
         }
         let extra = candidates.count > 3 ? ", +\(candidates.count - 3) more" : ""
         let detail = String(
@@ -781,7 +870,7 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
             title: "Big processes that look unused",
             detail: detail,
             severity: .ok,
-            culprits: candidates.map(\.name),
+            culprits: candidates.map { ctx.describer($0) },
             kind: .narrative
         )
     }

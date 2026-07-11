@@ -1,9 +1,14 @@
 import SwiftUI
 
-/// Single inline row that surfaces the SMAppService daemon's state. Silent
-/// when everything's working (`enabled`); otherwise shows what the user
-/// needs to do (enable, approve, or fix). Lives just above the menu's
-/// footer so it's always visible without scrolling.
+/// Inline row that surfaces the SMAppService daemon's state.
+///
+/// **Rendering strategy**: actionable states (offer to enable, approve,
+/// retry) get the full row so the button is prominent. The one
+/// non-actionable case — `.notFound` under ad-hoc signing, which the
+/// user cannot fix from Whirr — renders as `EmptyView()`. That state
+/// still surfaces as a compact info-icon in the footer via
+/// `DaemonStatusHint`, so anyone curious can hover for the explanation
+/// without it dominating a 60 pt slice of the menu on every open.
 struct DaemonStatusRow: View {
     let daemon: DaemonManager
 
@@ -34,14 +39,10 @@ struct DaemonStatusRow: View {
             )
 
         case .notFound:
-            advisoryRow(
-                icon: "exclamationmark.shield",
-                iconColor: .secondary,
-                title: "Advanced sampling unavailable",
-                detail: notFoundDetail,
-                actionLabel: nil,
-                action: nil
-            )
+            // Non-actionable under ad-hoc signing. Deferred to the footer
+            // hint so it doesn't dominate every menu open with three
+            // lines of unfixable-for-you copy.
+            EmptyView()
 
         case .error(let message):
             advisoryRow(
@@ -68,6 +69,17 @@ struct DaemonStatusRow: View {
                 + "your own processes only."
         }
         return "Run dist/Whirr.app for the bundled daemon path."
+    }
+
+    /// True when the current daemon state produces no advisory row —
+    /// used by MenuBarView to decide whether to render the divider
+    /// above it. Prevents an orphan divider when the row itself is
+    /// hidden (`.enabled` and `.notFound`).
+    var producesRow: Bool {
+        switch daemon.state {
+        case .enabled, .notFound: return false
+        case .notRegistered, .requiresApproval, .error: return true
+        }
     }
 
     @ViewBuilder
@@ -99,5 +111,37 @@ struct DaemonStatusRow: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Compact icon-with-tooltip for the footer. Renders the same daemon
+/// state advice the row would, but shrunk to a small badge that lives
+/// next to the RAM/swap line. Used specifically for the `.notFound`
+/// (ad-hoc signing) state — advisory-row-worthy would be too loud, but
+/// hiding it entirely means the curious user can't find out why.
+struct DaemonStatusHint: View {
+    let daemon: DaemonManager
+
+    var body: some View {
+        if case .notFound = daemon.state {
+            Image(systemName: "shield")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .help(notFoundDetail)
+                .accessibilityLabel("Advanced sampling unavailable")
+                .accessibilityHint(notFoundDetail)
+        }
+    }
+
+    /// Matches the copy the full row used to show — kept identical so
+    /// the tooltip is the *only* place this explanation lives (single
+    /// source of truth for the ad-hoc-signing story).
+    private var notFoundDetail: String {
+        let runningFromBundle = Bundle.main.bundlePath.hasSuffix(".app")
+        if runningFromBundle {
+            return "Advanced sampling requires Developer ID signing for the bundled daemon. "
+                + "This build is ad-hoc signed — Whirr is sampling your own processes only."
+        }
+        return "Run dist/Whirr.app for the bundled daemon path."
     }
 }

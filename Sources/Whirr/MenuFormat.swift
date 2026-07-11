@@ -27,4 +27,22 @@ enum MenuFormat {
         if percent >= 10 { return String(format: "%.0f%%", percent) }
         return String(format: "%.1f%%", percent)
     }
+
+    /// Human duration for "on for X" badges next to diagnoses. Rounds to
+    /// the most relevant unit — seconds/minutes/hours — and avoids
+    /// awkward mixed forms like "1h 3m" (a diagnosis being "1h 3m" old
+    /// vs. "1h 5m" old isn't a distinction worth showing).
+    static func duration(seconds: Int) -> String {
+        if seconds < 60 { return "\(max(0, seconds))s" }
+        if seconds < 3600 { return "\(seconds / 60) min" }
+        return "\(seconds / 3600)h"
+    }
+
+    /// "in 42 min" / "in 2h" — reverse of `duration(seconds:)`, used for
+    /// snooze-expiry hints.
+    static func timeUntil(_ until: Date, from now: Date = Date()) -> String {
+        let seconds = Int(until.timeIntervalSince(now))
+        guard seconds > 0 else { return "expired" }
+        return "in \(duration(seconds: seconds))"
+    }
 }

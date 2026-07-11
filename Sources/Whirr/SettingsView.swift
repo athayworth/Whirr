@@ -10,6 +10,11 @@ struct SettingsView: View {
     /// Outcome of loading rules.json at startup. Drives the status hint
     /// in the Rules tab — "loaded", "no file yet", "malformed", etc.
     let rulesLoadResult: RulesConfigStore.LoadResult
+    /// The monitor's incident log — drives the Insights charts. Passed
+    /// through so the settings sheet reads the same instance the
+    /// pipeline writes into, i.e., recent incidents show up immediately
+    /// without a file re-read.
+    let incidentLog: IncidentLog
 
     @AppStorage(Preferences.Key.samplingIntervalSeconds) private var samplingInterval =
         Preferences.defaultSamplingIntervalSeconds
@@ -17,6 +22,10 @@ struct SettingsView: View {
         Preferences.defaultNotificationsEnabled
     @AppStorage(Preferences.Key.notificationCooldownSeconds) private var notificationCooldown =
         Preferences.defaultNotificationCooldownSeconds
+    @AppStorage(Preferences.Key.notifyOnRecovery) private var notifyOnRecovery =
+        Preferences.defaultNotifyOnRecovery
+    @AppStorage(Preferences.Key.compactMode) private var compactMode =
+        Preferences.defaultCompactMode
 
     /// SwiftUI's Slider on the macOS 26 SDK has a long preferred initializer
     /// that breaks overload resolution when you also pass `step:`. We bind
@@ -41,12 +50,18 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             notifications
                 .tabItem { Label("Notifications", systemImage: "bell") }
+            InsightsView(log: incidentLog)
+                .tabItem { Label("Insights", systemImage: "chart.bar.xaxis") }
             rules
                 .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
             about
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 460, height: 340)
+        // Wider + taller than a typical Settings panel because Insights
+        // packs multiple charts + a scrollable incident list. The panel
+        // itself is resizable — a MacBook Air user can shrink it, a
+        // Studio Display user can grow it to see everything at once.
+        .frame(minWidth: 560, idealWidth: 640, minHeight: 500, idealHeight: 620)
     }
 
     // MARK: - General
@@ -79,6 +94,13 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Compact menu", isOn: $compactMode)
+                Text("Drops the duration/trend badges and shrinks process rows for a shorter menu. Detailed mode (the default) keeps everything visible so you can see how long each condition has been active and which direction it's trending.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Button("Reset to defaults", role: .destructive) {
                     resetToDefaults()
                 }
@@ -95,6 +117,14 @@ struct SettingsView: View {
             Section {
                 Toggle("Notify on new critical diagnoses", isOn: $notificationsEnabled)
                 Text("Whirr posts a macOS notification the first time a diagnosis becomes critical. A per-condition cooldown stops flapping problems from spamming you.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Notify when things clear up", isOn: $notifyOnRecovery)
+                    .disabled(!notificationsEnabled)
+                Text("Send a silent \"all clear\" notification when a previously-critical diagnosis resolves. Off by default — turn on if you want to know the machine is safe again without checking the menu.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -282,5 +312,7 @@ struct SettingsView: View {
         samplingInterval = Preferences.defaultSamplingIntervalSeconds
         notificationsEnabled = Preferences.defaultNotificationsEnabled
         notificationCooldown = Preferences.defaultNotificationCooldownSeconds
+        notifyOnRecovery = Preferences.defaultNotifyOnRecovery
+        compactMode = Preferences.defaultCompactMode
     }
 }

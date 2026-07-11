@@ -125,20 +125,37 @@ public struct SwapThrashingRuleConfig: Codable, Sendable, Equatable {
     public let warningGB: Double
     /// Promotes to critical at this much swap, *and* requires memory
     /// pressure to still be non-normal (see SwapThrashingRule's gate
-    /// comment).
+    /// comment) *and* the page-in rate to exceed
+    /// `thrashingPageInsPerSecond`.
     public let criticalGB: Double
-    public init(enabled: Bool = true, warningGB: Double = 2.0, criticalGB: Double = 6.0) {
+    /// Page-in rate (pages/sec) above which we consider the machine to
+    /// be *actively* thrashing swap, not just holding old pages on disk.
+    /// 500/s at 16 KB pages ≈ 8 MB/s of paging traffic — enough to be
+    /// felt on foreground input latency, low enough to catch real
+    /// slowdowns without firing on the routine kernel housekeeping that
+    /// happens after any wake-from-sleep event.
+    public let thrashingPageInsPerSecond: Double
+    public init(
+        enabled: Bool = true,
+        warningGB: Double = 2.0,
+        criticalGB: Double = 6.0,
+        thrashingPageInsPerSecond: Double = 500
+    ) {
         self.enabled = enabled
         self.warningGB = warningGB
         self.criticalGB = criticalGB
+        self.thrashingPageInsPerSecond = thrashingPageInsPerSecond
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         self.warningGB = try c.decodeIfPresent(Double.self, forKey: .warningGB) ?? 2.0
         self.criticalGB = try c.decodeIfPresent(Double.self, forKey: .criticalGB) ?? 6.0
+        self.thrashingPageInsPerSecond = try c.decodeIfPresent(Double.self, forKey: .thrashingPageInsPerSecond) ?? 500
     }
-    private enum CodingKeys: String, CodingKey { case enabled, warningGB, criticalGB }
+    private enum CodingKeys: String, CodingKey {
+        case enabled, warningGB, criticalGB, thrashingPageInsPerSecond
+    }
 }
 
 public struct ThermalThrottleRuleConfig: Codable, Sendable, Equatable {
@@ -196,9 +213,16 @@ public struct BackupHoggingRuleConfig: Codable, Sendable, Equatable {
 
 public struct HighDiskIORuleConfig: Codable, Sendable, Equatable {
     public let enabled: Bool
+    /// Modern Apple Silicon NVMe SSDs sustain 3–6 GB/s. The old 50 MB/s
+    /// warning threshold (~1% utilization on such a drive) fired
+    /// constantly on any active build/checkout and taught users to
+    /// ignore the diagnosis. 200 MB/s is where sustained I/O actually
+    /// starts to compete with the compressed-memory read path; 800 MB/s
+    /// is genuine bandwidth pressure. Users on older / external
+    /// spinning-disk setups can lower these via rules.json.
     public let warningMBs: Double
     public let criticalMBs: Double
-    public init(enabled: Bool = true, warningMBs: Double = 50.0, criticalMBs: Double = 200.0) {
+    public init(enabled: Bool = true, warningMBs: Double = 200.0, criticalMBs: Double = 800.0) {
         self.enabled = enabled
         self.warningMBs = warningMBs
         self.criticalMBs = criticalMBs
@@ -206,8 +230,8 @@ public struct HighDiskIORuleConfig: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
-        self.warningMBs = try c.decodeIfPresent(Double.self, forKey: .warningMBs) ?? 50.0
-        self.criticalMBs = try c.decodeIfPresent(Double.self, forKey: .criticalMBs) ?? 200.0
+        self.warningMBs = try c.decodeIfPresent(Double.self, forKey: .warningMBs) ?? 200.0
+        self.criticalMBs = try c.decodeIfPresent(Double.self, forKey: .criticalMBs) ?? 800.0
     }
     private enum CodingKeys: String, CodingKey { case enabled, warningMBs, criticalMBs }
 }
