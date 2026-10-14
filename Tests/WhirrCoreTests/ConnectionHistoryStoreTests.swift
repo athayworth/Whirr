@@ -58,3 +58,16 @@ final class ConnectionHistoryStoreTests: XCTestCase {
         XCTAssertEqual(store.aggregates(since: .distantPast).count, 2)
     }
 }
+
+extension ConnectionHistoryStoreTests {
+    func testSavedTestsRoundTripNewestLastCappedAtFifty() {
+        let store = ConnectionHistoryStore(directory: dir)
+        for i in 0..<55 {
+            store.saveTest(ConnectionTestResult(at: t0.addingTimeInterval(Double(i)), networkId: "home", nq: nil,
+                                                gatewayIdle: .empty, gatewayLoaded: .empty, link: nil, neighbors: []))
+        }
+        let tests = ConnectionHistoryStore(directory: dir).tests()
+        XCTAssertEqual(tests.count, 50)
+        XCTAssertEqual(tests.last?.at, t0.addingTimeInterval(54))
+    }
+}

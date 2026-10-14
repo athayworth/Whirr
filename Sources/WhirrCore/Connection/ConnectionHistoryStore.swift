@@ -46,6 +46,8 @@ public final class ConnectionHistoryStore: @unchecked Sendable {
 
     private var historyURL: URL { directory.appendingPathComponent("connection-history.jsonl") }
     private var outagesURL: URL { directory.appendingPathComponent("outages.json") }
+    private var testsURL: URL { directory.appendingPathComponent("connection-tests.json") }
+    static let maxSavedTests = 50
 
     public static var defaultDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -101,6 +103,28 @@ public final class ConnectionHistoryStore: @unchecked Sendable {
 
     public func outages() -> [OutageRecord] {
         lock.withLock { readOutages() }
+    }
+
+    // MARK: Full test results
+
+    public func saveTest(_ result: ConnectionTestResult) {
+        lock.withLock {
+            var all = readTests()
+            all.append(result)
+            all = Array(all.suffix(Self.maxSavedTests))
+            ensureDirectory()
+            if let data = try? encoder.encode(all) { try? data.write(to: testsURL, options: .atomic) }
+        }
+    }
+
+    /// Saved results, oldest first.
+    public func tests() -> [ConnectionTestResult] {
+        lock.withLock { readTests() }
+    }
+
+    private func readTests() -> [ConnectionTestResult] {
+        guard let data = try? Data(contentsOf: testsURL) else { return [] }
+        return (try? decoder.decode([ConnectionTestResult].self, from: data)) ?? []
     }
 
     // MARK: Retention
