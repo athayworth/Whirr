@@ -14,7 +14,11 @@ let package = Package(
     targets: [
         .target(
             name: "WhirrCore",
-            path: "Sources/WhirrCore"
+            path: "Sources/WhirrCore",
+            linkerSettings: [
+                .linkedFramework("CoreWLAN"),
+                .linkedFramework("SystemConfiguration")
+            ]
         ),
         .executableTarget(
             name: "Whirr",
