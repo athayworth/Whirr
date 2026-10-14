@@ -38,6 +38,9 @@ public struct RulesConfig: Codable, Sendable, Equatable {
     public let memoryLeak: MemoryLeakConfig
     public let idleMemoryHogs: IdleMemoryHogsConfig
 
+    // Connection
+    public let connection: ConnectionRuleConfig
+
     public init(
         formatVersion: Int = currentFormatVersion,
         memoryPressure: MemoryPressureRuleConfig = .init(),
@@ -56,7 +59,8 @@ public struct RulesConfig: Codable, Sendable, Equatable {
         spotlightReindex: SpotlightReindexConfig = .init(),
         dockerStrain: DockerStrainConfig = .init(),
         memoryLeak: MemoryLeakConfig = .init(),
-        idleMemoryHogs: IdleMemoryHogsConfig = .init()
+        idleMemoryHogs: IdleMemoryHogsConfig = .init(),
+        connection: ConnectionRuleConfig = .init()
     ) {
         self.formatVersion = formatVersion
         self.memoryPressure = memoryPressure
@@ -76,6 +80,7 @@ public struct RulesConfig: Codable, Sendable, Equatable {
         self.dockerStrain = dockerStrain
         self.memoryLeak = memoryLeak
         self.idleMemoryHogs = idleMemoryHogs
+        self.connection = connection
     }
 
     public static let `default` = RulesConfig()
@@ -104,6 +109,7 @@ public struct RulesConfig: Codable, Sendable, Equatable {
         self.dockerStrain = try c.decodeIfPresent(DockerStrainConfig.self, forKey: .dockerStrain) ?? .init()
         self.memoryLeak = try c.decodeIfPresent(MemoryLeakConfig.self, forKey: .memoryLeak) ?? .init()
         self.idleMemoryHogs = try c.decodeIfPresent(IdleMemoryHogsConfig.self, forKey: .idleMemoryHogs) ?? .init()
+        self.connection = try c.decodeIfPresent(ConnectionRuleConfig.self, forKey: .connection) ?? .init()
     }
 }
 
@@ -390,5 +396,6 @@ private extension RulesConfig {
         case backupChokingForeground, memorySwapSpiral, thermalThrottleAmplifier
         case diskMemoryContention, windowServerHog, spotlightReindex
         case dockerStrain, memoryLeak, idleMemoryHogs
+        case connection
     }
 }

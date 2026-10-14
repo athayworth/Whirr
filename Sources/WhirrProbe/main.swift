@@ -83,6 +83,40 @@ if CommandLine.arguments.contains("--docker") {
     exit(0)
 }
 
+// Optional: run the passive connection monitor for 30 s and print what
+// the Connection section and rules would see. History goes to a temp dir
+// so probe runs never pollute the app's real connection history.
+if CommandLine.arguments.contains("--network") {
+    func fmt(_ ms: Double?) -> String { ms.map { String(format: "%.1f ms", $0) } ?? "—" }
+    func line(_ name: String, _ h: HopStats) -> String {
+        "  \(name.padding(toLength: 10, withPad: " ", startingAt: 0)) n=\(h.count)  median \(fmt(h.medianMs))  p95 \(fmt(h.p95Ms))  jitter \(fmt(h.jitterMs))  loss \(String(format: "%.1f%%", h.lossPercent))  spikes \(h.spikes)"
+    }
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("whirr-probe-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let monitor = ConnectionMonitor(store: ConnectionHistoryStore(directory: tmp))
+    if let gw = GatewayResolver.current() { print("Gateway: \(gw.ip)  (\(gw.mac ?? "no MAC"))") } else { print("Gateway: none") }
+    print("Sampling 30 s…")
+    for _ in 0..<15 {
+        await monitor.pingRound(at: Date())
+        try? await Task.sleep(for: .seconds(ConnectionMonitor.interval))
+    }
+    let snap = await monitor.snapshot()
+    if let l = snap.link {
+        print("Wi-Fi: \(l.band) ch \(l.channel) (\(l.widthMHz) MHz)  signal \(l.rssi) dBm  noise \(l.noise) dBm  SNR \(l.snr) dB  \(l.phyMode) @ \(Int(l.txRateMbps)) Mbps")
+    } else {
+        print(snap.isWired ? "Wired (no Wi-Fi association)" : "No Wi-Fi link")
+    }
+    if !snap.gatewayPingable { print("Router does not answer pings — internet-only mode") }
+    print(line("router", snap.gateway1m))
+    print(line("internet", snap.internet1m))
+    if let o = snap.currentOutage { print("OUTAGE in progress since \(o.start): \(o.cause.rawValue)") }
+    let diagnoses = RulesEngine().evaluate(snapshot: .empty, processes: [], connection: snap)
+        .filter { $0.area == .connection }
+    print(diagnoses.isEmpty ? "No connection findings (rules judge 10-min windows; 30 s is a preview)." : "")
+    for d in diagnoses { print("  [\(d.severity)] \(d.title)\n      \(d.detail)") }
+    exit(0)
+}
+
 // Optional: read the daemon's snapshot file and re-evaluate rules against
 // it (matches the menu bar app's path when the daemon is installed).
 if CommandLine.arguments.contains("--use-daemon") {

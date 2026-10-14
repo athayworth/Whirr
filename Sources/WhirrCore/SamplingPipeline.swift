@@ -120,11 +120,13 @@ public actor SamplingPipeline {
 
     public func tick(
         containers: [DockerContainer] = [],
-        recentlyActiveBundleIds: Set<String> = []
+        recentlyActiveBundleIds: Set<String> = [],
+        connection: ConnectionSnapshot? = nil
     ) -> Result {
         let (fromDaemon, daemonStatus) = readDaemonSnapshot(
             containers: containers,
-            recentlyActiveBundleIds: recentlyActiveBundleIds
+            recentlyActiveBundleIds: recentlyActiveBundleIds,
+            connection: connection
         )
         if let fromDaemon { return fromDaemon }
         let snapshot = systemSampler.sample()
@@ -135,7 +137,8 @@ public actor SamplingPipeline {
             dockerContainers: containers,
             describer: { ProcessDescriptor.shared.friendlyName(for: $0) },
             bundleIdentifier: { ProcessDescriptor.shared.bundleIdentifier(for: $0) },
-            recentlyActiveBundleIds: recentlyActiveBundleIds
+            recentlyActiveBundleIds: recentlyActiveBundleIds,
+            connection: connection
         )
         return buildResult(
             snapshot: snapshot,
@@ -149,7 +152,8 @@ public actor SamplingPipeline {
 
     private func readDaemonSnapshot(
         containers: [DockerContainer],
-        recentlyActiveBundleIds: Set<String>
+        recentlyActiveBundleIds: Set<String>,
+        connection: ConnectionSnapshot?
     ) -> (Result?, DaemonStatus) {
         let url = URL(fileURLWithPath: snapshotPath)
         guard let data = try? Data(contentsOf: url, options: .uncached) else { return (nil, .absent) }
@@ -168,7 +172,8 @@ public actor SamplingPipeline {
             dockerContainers: containers,
             describer: { ProcessDescriptor.shared.friendlyName(for: $0) },
             bundleIdentifier: { ProcessDescriptor.shared.bundleIdentifier(for: $0) },
-            recentlyActiveBundleIds: recentlyActiveBundleIds
+            recentlyActiveBundleIds: recentlyActiveBundleIds,
+            connection: connection
         )
         return (buildResult(
             snapshot: payload.snapshot,

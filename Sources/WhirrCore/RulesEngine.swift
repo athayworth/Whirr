@@ -15,7 +15,8 @@ public struct RulesEngine: Sendable {
         dockerContainers: [DockerContainer] = [],
         describer: @escaping @Sendable (ProcessSample) -> String = { $0.name },
         bundleIdentifier: @escaping @Sendable (ProcessSample) -> String? = { _ in nil },
-        recentlyActiveBundleIds: Set<String> = []
+        recentlyActiveBundleIds: Set<String> = [],
+        connection: ConnectionSnapshot? = nil
     ) -> [Diagnosis] {
         let core = CoreContext(
             snapshot: snapshot,
@@ -24,7 +25,8 @@ public struct RulesEngine: Sendable {
             dockerContainers: dockerContainers,
             describer: describer,
             bundleIdentifier: bundleIdentifier,
-            recentlyActiveBundleIds: recentlyActiveBundleIds
+            recentlyActiveBundleIds: recentlyActiveBundleIds,
+            connection: connection
         )
 
         var standalone: [Diagnosis] = []
@@ -59,7 +61,11 @@ public struct RulesEngine: Sendable {
             BackupHoggingRule(config: config.backupHogging),
             HighDiskIORule(config: config.highDiskIO),
             RunawayProcessRule(config: config.runawayProcess),
-            LowDiskSpaceRule(config: config.lowDiskSpace)
+            LowDiskSpaceRule(config: config.lowDiskSpace),
+            OutageRule(config: config.connection),
+            SpikyWiFiRule(config: config.connection),
+            PastRouterRule(config: config.connection),
+            WeakSignalRule(config: config.connection)
         ]
     }
 
@@ -115,6 +121,9 @@ public struct CoreContext {
     /// its CPU idleness — a browser you read in without scrolling
     /// looks CPU-idle but isn't unused.
     public let recentlyActiveBundleIds: Set<String>
+    /// Passive connection monitor state; nil when unavailable (daemon,
+    /// probe without --network, tests that don't care).
+    public let connection: ConnectionSnapshot?
 
     public init(
         snapshot: SystemSnapshot,
@@ -123,8 +132,10 @@ public struct CoreContext {
         dockerContainers: [DockerContainer] = [],
         describer: @escaping @Sendable (ProcessSample) -> String = { $0.name },
         bundleIdentifier: @escaping @Sendable (ProcessSample) -> String? = { _ in nil },
-        recentlyActiveBundleIds: Set<String> = []
+        recentlyActiveBundleIds: Set<String> = [],
+        connection: ConnectionSnapshot? = nil
     ) {
+        self.connection = connection
         self.snapshot = snapshot
         self.processes = processes
         self.coreCount = coreCount
