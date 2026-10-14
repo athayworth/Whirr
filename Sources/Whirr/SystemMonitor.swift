@@ -46,6 +46,11 @@ final class SystemMonitor {
     /// Persistent log of closed diagnosis incidents. Written by the
     /// pipeline; read by the Insights tab in Settings.
     let incidentLog = IncidentLog()
+    /// Tracks which apps the user has focused recently — feeds the
+    /// idle-hogs narrative's "don't flag Arc while I'm reading in it"
+    /// exemption. Sampled once per tick on the main actor before
+    /// handing the snapshot to the pipeline.
+    private let frontmostAppTracker = FrontmostAppTracker()
 
     private let pipeline: SamplingPipeline
     private let taskBox = TaskBox()
@@ -148,7 +153,17 @@ final class SystemMonitor {
                 if tickCount % 2 == 0 {
                     lastKnownContainers = await dockerClient.listContainers()
                 }
-                let result = await pipeline.tick(containers: lastKnownContainers)
+                // Sample the frontmost app on the main actor before
+                // the pipeline runs — NSWorkspace can't be called off
+                // the main actor. Snapshot returns the set of bundle
+                // IDs the user has focused within the tracker's window.
+                let recentBundleIds = await MainActor.run {
+                    self?.frontmostAppTracker.recordAndSnapshot() ?? []
+                }
+                let result = await pipeline.tick(
+                    containers: lastKnownContainers,
+                    recentlyActiveBundleIds: recentBundleIds
+                )
                 await MainActor.run {
                     self?.apply(result)
                     self?.dockerContainers = lastKnownContainers

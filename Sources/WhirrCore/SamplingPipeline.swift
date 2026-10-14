@@ -107,8 +107,14 @@ public actor SamplingPipeline {
         self.incidentLog = incidentLog
     }
 
-    public func tick(containers: [DockerContainer] = []) -> Result {
-        if let fromDaemon = readDaemonSnapshot(containers: containers) {
+    public func tick(
+        containers: [DockerContainer] = [],
+        recentlyActiveBundleIds: Set<String> = []
+    ) -> Result {
+        if let fromDaemon = readDaemonSnapshot(
+            containers: containers,
+            recentlyActiveBundleIds: recentlyActiveBundleIds
+        ) {
             return fromDaemon
         }
         let snapshot = systemSampler.sample()
@@ -117,7 +123,9 @@ public actor SamplingPipeline {
             snapshot: snapshot,
             processes: processes,
             dockerContainers: containers,
-            describer: { ProcessDescriptor.shared.friendlyName(for: $0) }
+            describer: { ProcessDescriptor.shared.friendlyName(for: $0) },
+            bundleIdentifier: { ProcessDescriptor.shared.bundleIdentifier(for: $0) },
+            recentlyActiveBundleIds: recentlyActiveBundleIds
         )
         return buildResult(
             snapshot: snapshot,
@@ -128,7 +136,10 @@ public actor SamplingPipeline {
         )
     }
 
-    private func readDaemonSnapshot(containers: [DockerContainer]) -> Result? {
+    private func readDaemonSnapshot(
+        containers: [DockerContainer],
+        recentlyActiveBundleIds: Set<String>
+    ) -> Result? {
         let url = URL(fileURLWithPath: snapshotPath)
         guard let data = try? Data(contentsOf: url, options: .uncached) else { return nil }
         guard let payload = try? decoder.decode(SnapshotPayload.self, from: data) else { return nil }
@@ -141,7 +152,10 @@ public actor SamplingPipeline {
         let diagnoses = rules.evaluate(
             snapshot: payload.snapshot,
             processes: payload.processes,
-            dockerContainers: containers
+            dockerContainers: containers,
+            describer: { ProcessDescriptor.shared.friendlyName(for: $0) },
+            bundleIdentifier: { ProcessDescriptor.shared.bundleIdentifier(for: $0) },
+            recentlyActiveBundleIds: recentlyActiveBundleIds
         )
         return buildResult(
             snapshot: payload.snapshot,

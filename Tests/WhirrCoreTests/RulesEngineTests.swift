@@ -60,6 +60,70 @@ final class RulesEngineTests: XCTestCase {
         diagnoses.map(\.title)
     }
 
+    // MARK: - Idle memory hogs: frontmost-app exemption
+
+    func testIdleHogsExemptsRecentlyFocusedApps() {
+        // Arc has been CPU-idle for a long stretch, has a big memory
+        // footprint, and would normally be flagged. But the user has
+        // been focused on it — its bundle ID is in the recently-active
+        // set. The narrative must skip it.
+        let arc = process(
+            pid: 100,
+            name: "Arc",
+            mem: 3 * .gb,
+            idle: IdleMemoryHogsNarrative.minIdleSamples + 10
+        )
+        // A second hog nobody has focused, so we still have SOME
+        // candidates and can verify Arc specifically got filtered
+        // (not that the whole narrative was suppressed).
+        let forgottenSlack = process(
+            pid: 200,
+            name: "Slack",
+            mem: 3 * .gb,
+            idle: IdleMemoryHogsNarrative.minIdleSamples + 10
+        )
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [arc, forgottenSlack],
+            // The rule reads bundle IDs via ctx.bundleIdentifier —
+            // in tests we short-circuit by pattern-matching the raw
+            // process name. Prod uses ProcessDescriptor's Info.plist
+            // walk; the exemption logic is the same either way.
+            bundleIdentifier: { proc in
+                proc.name == "Arc" ? "company.arc.browser" : nil
+            },
+            recentlyActiveBundleIds: ["company.arc.browser"]
+        )
+        let unusedHogs = result.first { $0.title == "Big processes that look unused" }
+        XCTAssertNotNil(unusedHogs, "Narrative should still fire for the unfocused Slack candidate")
+        XCTAssertFalse(unusedHogs?.detail.contains("Arc") ?? false,
+                       "Focused Arc must not appear in the unused-hogs card")
+        XCTAssertTrue(unusedHogs?.detail.contains("Slack") ?? false,
+                      "Unfocused Slack should still be flagged")
+    }
+
+    func testIdleHogsSuppressedEntirelyWhenAllCandidatesAreFocused() {
+        // Every hog is a focused app — after exemption, no candidates
+        // remain and the narrative doesn't fire.
+        let arc = process(pid: 100, name: "Arc", mem: 3 * .gb,
+                          idle: IdleMemoryHogsNarrative.minIdleSamples + 10)
+        let xcode = process(pid: 101, name: "Xcode", mem: 4 * .gb,
+                            idle: IdleMemoryHogsNarrative.minIdleSamples + 10)
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [arc, xcode],
+            bundleIdentifier: { proc in
+                switch proc.name {
+                case "Arc": return "company.arc.browser"
+                case "Xcode": return "com.apple.dt.Xcode"
+                default: return nil
+                }
+            },
+            recentlyActiveBundleIds: ["company.arc.browser", "com.apple.dt.Xcode"]
+        )
+        XCTAssertNil(result.first { $0.title == "Big processes that look unused" })
+    }
+
     // MARK: - Idle baseline
 
     func testIdleSystemProducesNoDiagnoses() {

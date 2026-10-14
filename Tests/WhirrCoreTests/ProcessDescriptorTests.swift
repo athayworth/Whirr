@@ -98,6 +98,36 @@ final class ProcessDescriptorTests: XCTestCase {
 
     // MARK: - Caching
 
+    // MARK: - Bundle identifier lookup
+
+    func testBundleIdentifierResolvesFromInfoPlist() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WhirrDescBundleTest-\(UUID().uuidString).app")
+        let contents = tmp.appendingPathComponent("Contents")
+        let macOS = contents.appendingPathComponent("MacOS")
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        let plist: [String: Any] = ["CFBundleIdentifier": "com.example.testapp"]
+        let plistData = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try plistData.write(to: contents.appendingPathComponent("Info.plist"))
+        let binary = macOS.appendingPathComponent("testapp").path
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let id = ProcessDescriptor().bundleIdentifier(for: proc("testapp", path: binary))
+        XCTAssertEqual(id, "com.example.testapp")
+    }
+
+    func testBundleIdentifierNilForProcessWithoutBundle() {
+        // A CLI daemon with no .app in its path.
+        let id = ProcessDescriptor().bundleIdentifier(for: proc("some-daemon", path: "/usr/bin/some-daemon"))
+        XCTAssertNil(id)
+    }
+
+    func testBundleIdentifierNilWhenExecutablePathMissing() {
+        // Kernel tasks + other-user processes we can't read the path for.
+        let id = ProcessDescriptor().bundleIdentifier(for: proc("kernel_task", path: nil))
+        XCTAssertNil(id)
+    }
+
     func testResultsAreCachedByPath() {
         // Same path resolves to the same result twice — a stand-in for
         // "we don't re-read Info.plist every tick." Verified by observing

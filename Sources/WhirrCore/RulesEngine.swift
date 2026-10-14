@@ -13,14 +13,18 @@ public struct RulesEngine: Sendable {
         snapshot: SystemSnapshot,
         processes: [ProcessSample],
         dockerContainers: [DockerContainer] = [],
-        describer: @escaping @Sendable (ProcessSample) -> String = { $0.name }
+        describer: @escaping @Sendable (ProcessSample) -> String = { $0.name },
+        bundleIdentifier: @escaping @Sendable (ProcessSample) -> String? = { _ in nil },
+        recentlyActiveBundleIds: Set<String> = []
     ) -> [Diagnosis] {
         let core = CoreContext(
             snapshot: snapshot,
             processes: processes,
             coreCount: ProcessInfo.processInfo.activeProcessorCount,
             dockerContainers: dockerContainers,
-            describer: describer
+            describer: describer,
+            bundleIdentifier: bundleIdentifier,
+            recentlyActiveBundleIds: recentlyActiveBundleIds
         )
 
         var standalone: [Diagnosis] = []
@@ -97,19 +101,37 @@ public struct CoreContext {
     /// narratives say "Google Chrome" rather than "Google Chrome Helper
     /// (Renderer)".
     public let describer: @Sendable (ProcessSample) -> String
+    /// Resolves a process's parent-app bundle identifier
+    /// (CFBundleIdentifier — same value NSWorkspace uses for
+    /// `frontmostApplication`). Returns nil for CLI daemons, kernel
+    /// tasks, or processes we can't introspect. Used by rules that
+    /// need to reconcile the process table with user-facing app
+    /// identity — most importantly the idle-hogs narrative, which
+    /// exempts apps the user actually focused recently.
+    public let bundleIdentifier: @Sendable (ProcessSample) -> String?
+    /// Bundle IDs of apps the user has focused within some recent
+    /// window (30 min by default in the pipeline). A process whose
+    /// parent app is in this set is considered "in use" regardless of
+    /// its CPU idleness — a browser you read in without scrolling
+    /// looks CPU-idle but isn't unused.
+    public let recentlyActiveBundleIds: Set<String>
 
     public init(
         snapshot: SystemSnapshot,
         processes: [ProcessSample],
         coreCount: Int,
         dockerContainers: [DockerContainer] = [],
-        describer: @escaping @Sendable (ProcessSample) -> String = { $0.name }
+        describer: @escaping @Sendable (ProcessSample) -> String = { $0.name },
+        bundleIdentifier: @escaping @Sendable (ProcessSample) -> String? = { _ in nil },
+        recentlyActiveBundleIds: Set<String> = []
     ) {
         self.snapshot = snapshot
         self.processes = processes
         self.coreCount = coreCount
         self.dockerContainers = dockerContainers
         self.describer = describer
+        self.bundleIdentifier = bundleIdentifier
+        self.recentlyActiveBundleIds = recentlyActiveBundleIds
     }
 
     var topProcess: ProcessSample? { processes.first }
@@ -843,6 +865,15 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
             .filter {
                 $0.memoryBytes >= floorBytes
                 && $0.sustainedIdleSamples >= config.minIdleSamples
+                // Exempt apps the user has recently focused. CPU-idle
+                // ≠ unused for GUI apps: a browser sitting on a static
+                // page reads as idle even though the user is reading
+                // it. NSWorkspace's frontmost history (sampled each
+                // tick) lets us reconcile "process CPU" with "user
+                // attention" — if the parent-app bundle ID was
+                // frontmost within the tracker's lookback window, the
+                // process stays off the unused list.
+                && !isRecentlyActiveApp($0, ctx: ctx)
             }
             .sorted { $0.memoryBytes > $1.memoryBytes }
         guard !candidates.isEmpty else { return nil }
@@ -879,6 +910,12 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
         let gb = Double(bytes) / 1_073_741_824
         if gb >= 1.0 { return String(format: "%.1f GB", gb) }
         return String(format: "%.0f MB", Double(bytes) / 1_048_576)
+    }
+
+    private func isRecentlyActiveApp(_ proc: ProcessSample, ctx: CoreContext) -> Bool {
+        guard !ctx.recentlyActiveBundleIds.isEmpty else { return false }
+        guard let bundleId = ctx.bundleIdentifier(proc) else { return false }
+        return ctx.recentlyActiveBundleIds.contains(bundleId)
     }
 }
 

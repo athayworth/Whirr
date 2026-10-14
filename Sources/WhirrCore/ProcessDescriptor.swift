@@ -54,6 +54,12 @@ public final class ProcessDescriptor: @unchecked Sendable {
 
     private let lock = NSLock()
     private var cache: [String: ProcessDescription] = [:]
+    /// Bundle-identifier cache keyed by executable path. Separate from
+    /// the ProcessDescription cache so callers that only need the
+    /// bundle ID (frontmost-app filtering) don't pay the known-name
+    /// table lookup + explainer construction. Same .app walk is shared
+    /// via `topLevelAppBundle` so the plist read isn't duplicated.
+    private var bundleIdCache: [String: String?] = [:]
 
     public init() {}
 
@@ -73,6 +79,32 @@ public final class ProcessDescriptor: @unchecked Sendable {
     /// full description.
     public func friendlyName(for proc: ProcessSample) -> String {
         describe(proc).friendlyName
+    }
+
+    /// The macOS bundle identifier (CFBundleIdentifier) of the top-level
+    /// .app that owns the process — same value NSWorkspace reports for
+    /// its `frontmostApplication`. Used to reconcile the process table
+    /// with "which apps has the user been focusing" for the idle-hogs
+    /// filter. Returns nil for processes that aren't inside an .app
+    /// bundle (kernel tasks, CLI daemons) or that we can't introspect.
+    public func bundleIdentifier(for proc: ProcessSample) -> String? {
+        guard let path = proc.executablePath else { return nil }
+        if let cached = lock.withLock({ bundleIdCache[path] }) { return cached }
+        let value = readBundleIdentifier(executablePath: path)
+        lock.withLock { bundleIdCache[path] = value }
+        return value
+    }
+
+    private func readBundleIdentifier(executablePath: String) -> String? {
+        guard let (_, bundlePath) = topLevelAppBundle(for: executablePath) else { return nil }
+        let plistPath = bundlePath + "/Contents/Info.plist"
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: plistPath)),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let dict = plist as? [String: Any],
+              let bundleId = dict["CFBundleIdentifier"] as? String,
+              !bundleId.isEmpty
+        else { return nil }
+        return bundleId
     }
 
     private func cacheKey(for proc: ProcessSample) -> String {
