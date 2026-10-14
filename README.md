@@ -4,11 +4,23 @@
 
 # Whirr
 
-A macOS menu bar app that tells you **why** your Mac is slow — not just how slow.
+A macOS app that tells you **why** your Mac or your connection feels slow — not just how slow.
 
-Most performance monitors (Stats, iStat Menus, Activity Monitor) show gauges and let you draw your own conclusions. Whirr runs a rules engine over CPU, memory, swap, thermal, and per-process activity, and surfaces a plain-English diagnosis: *"Backup is hammering your system"*, *"Memory is saturated — apps will stutter"*, *"CPU is throttling from heat"*.
+Most performance monitors (Stats, iStat Menus, Activity Monitor) show gauges and let you draw your own conclusions. Whirr runs a rules engine over CPU, memory, swap, thermal, per-process activity and your network connection, and surfaces one plain-English answer with one thing to do: *"Backup is hammering your system — pause it"*, *"Wi-Fi is spiky — change your router's channel"*, *"Problem is past your router — here's what to tell your provider"*.
 
-> Local, privacy-respecting (no network besides update checks), MIT-licensed, no telemetry.
+> Local, privacy-respecting, MIT-licensed, no telemetry. Network use: tiny pings to your router and 1.1.1.1 every 2 s (~10 MB/day), update checks, and the optional user-started connection test (~500 MB).
+
+## Using Whirr
+
+Whirr lives in the menu bar. The icon stays neutral unless a real problem has lasted two minutes; it only notifies for serious problems that last five minutes and have a fix. Click the icon for the headline, or **Open Whirr…** (or launch Whirr again from Spotlight) for the window:
+
+- **Overview** — the one thing that matters right now, with its fix, plus Mac and Connection at a glance.
+- **Mac** — findings, memory/disk/heat in plain words, and what's using your Mac.
+- **Connection** — Wi-Fi signal, the two legs of your connection (Mac → router, Mac → internet) so you can tell Wi-Fi problems from provider problems, a *Check my connection* test with a plain-English report card, how each Wi-Fi channel has performed over time, and a dated outage log you can copy for your provider.
+- **History** — the last 30 minutes, outages, past tests, and which problems recur.
+- **Developer** — Docker containers and dev servers; appears only when Whirr detects them.
+
+Every finding has **Snooze** and **This is normal for me**; muted findings are listed in Settings → Quieted.
 
 <!-- TODO: drop a real menu screenshot at docs/screenshot-menu.png and uncomment.
 <p align="center">
@@ -66,7 +78,7 @@ What the install script does (review it before running):
 - Loads the daemon, which writes `snapshot.json` to the data dir every 3 seconds
 - Logs to `/var/log/whirr-sampler.log`
 
-The menu bar app automatically prefers the daemon's snapshot when it's fresh (< 10 s old) and falls back to in-process sampling otherwise. There is no "is the daemon installed?" check — if the file is there and current, it's used.
+The app automatically prefers the daemon's snapshot when it's fresh (< 10 s old) and falls back to in-process sampling otherwise. If the installed daemon is older than the app and its snapshot can't be read, the Mac section says so — re-run `sudo scripts/install-sampler.sh` after updating Whirr.
 
 Output-path validation: the sampler refuses to write anywhere outside `/Library/Application Support/Whirr/`, even when launched with arbitrary command-line arguments. This is enforced even at root, so a misconfigured invocation can't redirect output.
 
@@ -93,6 +105,9 @@ swift run whirr-probe                       # standard: system + processes + rul
 swift run whirr-probe --docker              # also hit Docker's Unix socket and dump
                                             # per-container CPU/mem (verifies the
                                             # DockerClient wire format end to end)
+swift run whirr-probe --network             # 30 s of live router/internet pings,
+                                            # Wi-Fi link details and connection
+                                            # findings (history goes to a temp dir)
 swift run whirr-probe --use-daemon          # read the installed sampler's snapshot
                                             # file and re-run the rules engine
                                             # against it — useful for testing rule
@@ -110,10 +125,15 @@ Sources/
     SystemSampler.swift     # host_statistics64 + sysctl + thermalState
     ProcessSampler.swift    # proc_listpids + proc_pidinfo + proc_name (libproc)
     RulesEngine.swift       # Pluggable rules over the above
-  Whirr/                    # SwiftUI menu bar app (depends on WhirrCore)
-    WhirrApp.swift          # @main + MenuBarExtra scene
-    SystemMonitor.swift     # @Observable wrapper + sampling loop
-    MenuBarView.swift       # Dropdown UI
+    Findings.swift          # Problem vs. note, area, suggested action (classifier post-pass)
+    VerdictSelector.swift   # The one headline; icon + notification gating
+    Connection/             # Pinger, Wi-Fi reader, stats, outages, history,
+                            # connection rules, channel comparison, full test
+  Whirr/                    # SwiftUI app (depends on WhirrCore)
+    WhirrApp.swift          # @main: MenuBarExtra popover + main Window
+    SystemMonitor.swift     # @Observable store + sampling loop
+    MainWindow.swift        # Sidebar window
+    Sections/               # Overview, Mac, Connection, History, Developer
     Resources/Info.plist    # LSUIElement=true (no dock icon)
   WhirrProbe/               # CLI test runner that prints a single diagnosis
   WhirrSampler/             # Privileged sampler daemon (run as root via launchd)
