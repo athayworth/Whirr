@@ -355,7 +355,13 @@ extension SystemMonitor {
         connectionTestPhase = .measuringIdle
         let runner = connectionTestRunner
         let store = connectionStore
+        let passive = connectionMonitor
         Task { [weak self] in
+            // The test saturates the line on purpose. Passive pings taken
+            // meanwhile would record self-inflicted stalls into history
+            // and skew the per-channel comparison, so pause them.
+            await passive.setPaused(true)
+            defer { Task { await passive.setPaused(false) } }
             let result = await runner.run { phase in
                 Task { @MainActor in self?.connectionTestPhase = phase == .done ? nil : phase }
             }

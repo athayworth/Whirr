@@ -178,7 +178,7 @@ enum ConnectionText {
         if let outage = c.currentOutage {
             return outage.cause == .isp ? "Internet line is down (router is fine)." : "Router isn't responding."
         }
-        if c.paused { return "Paused while the Mac sleeps." }
+        if c.paused { return "Background checks paused." }
         guard c.internet1m.count > 0 else { return "Checking…" }
         var parts: [String] = []
         if let link = c.link {
