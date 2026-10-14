@@ -22,6 +22,12 @@ import Observation
 @Observable
 public final class SnoozeStore {
     public static let userDefaultsKey = "preferences.snoozedDiagnoses.v1"
+    public static let mutedDefaultsKey = "preferences.mutedDiagnoses.v1"
+
+    /// Titles the user marked "This is normal for me". Unlike snoozes,
+    /// mutes never expire — they're removed only by an explicit unmute
+    /// (Settings lists them).
+    public private(set) var mutedTitles: [String] = []
 
     /// Backing dictionary. Titles map to expiry dates. Purged of expired
     /// entries on read + on write, so callers can trust that any key
@@ -73,6 +79,22 @@ public final class SnoozeStore {
         persist()
     }
 
+    public func isMuted(_ title: String) -> Bool {
+        mutedTitles.contains(title)
+    }
+
+    public func mute(_ title: String) {
+        guard !mutedTitles.contains(title) else { return }
+        mutedTitles.append(title)
+        mutedTitles.sort()
+        userDefaults.set(mutedTitles, forKey: Self.mutedDefaultsKey)
+    }
+
+    public func unmute(_ title: String) {
+        mutedTitles.removeAll { $0 == title }
+        userDefaults.set(mutedTitles, forKey: Self.mutedDefaultsKey)
+    }
+
     /// All currently-active snoozes, purged of expired ones. Consumed by
     /// the Snoozed section in the menu.
     public func active(at now: Date = Date()) -> [(title: String, until: Date)] {
@@ -87,6 +109,7 @@ public final class SnoozeStore {
     }
 
     private func loadFromDefaults() {
+        mutedTitles = (userDefaults.stringArray(forKey: Self.mutedDefaultsKey) ?? []).sorted()
         // Stored as [String: Date] using PropertyListEncoder because
         // UserDefaults handles Date natively. Any decode failure resets
         // to empty — snooze state is fully non-critical.

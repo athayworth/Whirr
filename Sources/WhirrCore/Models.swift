@@ -29,6 +29,13 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
     /// "System is actively paging" pile-up where three rows narrate
     /// the same underlying state at three levels of abstraction.
     public let subsumes: [String]
+    /// Problem vs. note — see `Diagnosis.Tier`. Assigned by
+    /// `FindingClassifier`; rules leave the default.
+    public let tier: Tier
+    /// Sidebar section this finding belongs to.
+    public let area: Area
+    /// The one fix the UI should offer, if any.
+    public let action: SuggestedAction?
 
     public init(
         title: String,
@@ -36,22 +43,42 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
         severity: Severity,
         culprits: [String] = [],
         kind: Kind = .standalone,
-        subsumes: [String] = []
+        subsumes: [String] = [],
+        tier: Tier = .problem,
+        area: Area = .mac,
+        action: SuggestedAction? = nil
     ) {
-        self.id = UUID()
+        self.init(id: UUID(), title: title, detail: detail, severity: severity, culprits: culprits,
+                  kind: kind, subsumes: subsumes, tier: tier, area: area, action: action)
+    }
+
+    private init(
+        id: UUID, title: String, detail: String, severity: Severity, culprits: [String],
+        kind: Kind, subsumes: [String], tier: Tier, area: Area, action: SuggestedAction?
+    ) {
+        self.id = id
         self.title = title
         self.detail = detail
         self.severity = severity
         self.culprits = culprits
         self.kind = kind
         self.subsumes = subsumes
+        self.tier = tier
+        self.area = area
+        self.action = action
+    }
+
+    /// Same finding (same `id`) with presentation fields replaced.
+    public func classified(tier: Tier, area: Area, action: SuggestedAction?) -> Diagnosis {
+        Diagnosis(id: id, title: title, detail: detail, severity: severity, culprits: culprits,
+                  kind: kind, subsumes: subsumes, tier: tier, area: area, action: action)
     }
 
     // Backward-compatible decoding for daemon payloads written before
     // `subsumes` existed — missing key decodes to []. Wire format
     // version is not bumped for the additive change.
     private enum CodingKeys: String, CodingKey {
-        case id, title, detail, severity, culprits, kind, subsumes
+        case id, title, detail, severity, culprits, kind, subsumes, tier, area, action
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,6 +90,9 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
         self.culprits = try c.decodeIfPresent([String].self, forKey: .culprits) ?? []
         self.kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .standalone
         self.subsumes = try c.decodeIfPresent([String].self, forKey: .subsumes) ?? []
+        self.tier = try c.decodeIfPresent(Tier.self, forKey: .tier) ?? .problem
+        self.area = try c.decodeIfPresent(Area.self, forKey: .area) ?? .mac
+        self.action = try c.decodeIfPresent(SuggestedAction.self, forKey: .action)
     }
 }
 

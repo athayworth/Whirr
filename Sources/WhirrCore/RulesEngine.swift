@@ -43,7 +43,7 @@ public struct RulesEngine: Sendable {
         }
 
         // Narratives lead, then standalone diagnoses ordered by severity.
-        return narratives + standalone
+        return FindingClassifier.classify(narratives + standalone)
     }
 
     /// Per-tick allocation but the rule structs are cheap value types
@@ -189,6 +189,10 @@ enum DiagnosisTitles {
     static let backupUsing = "Backup is using your system"
     static let diskBusy = "Disk is busy"
     static let runawaySuffix = "has been pegging CPU"
+    static let overloaded = "System is overloaded"
+    static let lowDisk = "Disk is nearly full"
+    static let dockerStrain = "Docker is using significant resources"
+    static let idleHogs = "Big processes that look unused"
 }
 
 // MARK: - Rules
@@ -296,7 +300,7 @@ struct OverloadedSystemRule: Rule {
         let ratio = load / cores
         guard ratio >= config.warningRatio else { return nil }
         return Diagnosis(
-            title: "System is overloaded",
+            title: DiagnosisTitles.overloaded,
             detail: String(
                 format: "Load average is %.1f on %d cores (%.1f× capacity). Too many processes are competing.",
                 load, ctx.coreCount, ratio
@@ -411,7 +415,7 @@ struct LowDiskSpaceRule: Rule {
         let freeGB = Double(ctx.snapshot.rootDiskFreeBytes) / 1_073_741_824
         let severity: Severity = percentUsed >= config.criticalPercentUsed ? .critical : .warning
         return Diagnosis(
-            title: "Disk is nearly full",
+            title: DiagnosisTitles.lowDisk,
             detail: String(
                 format: "Boot volume is %.0f%% full (%.1f GB free). macOS slows down as free space drops — clearing space speeds things up.",
                 percentUsed, freeGB
@@ -713,7 +717,7 @@ struct DockerStrainNarrative: NarrativeRule {
         }
 
         return Diagnosis(
-            title: "Docker is using significant resources",
+            title: DiagnosisTitles.dockerStrain,
             detail: detail,
             severity: severity,
             culprits: dockerProcs.map(\.name),
@@ -898,7 +902,7 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
             pieces.joined(separator: ", "), extra, longestIdleMinutes, combinedGB
         )
         return Diagnosis(
-            title: "Big processes that look unused",
+            title: DiagnosisTitles.idleHogs,
             detail: detail,
             severity: .ok,
             culprits: candidates.map { ctx.describer($0) },

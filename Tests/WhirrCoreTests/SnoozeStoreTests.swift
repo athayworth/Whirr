@@ -123,3 +123,30 @@ final class SnoozeStoreTests: XCTestCase {
         XCTAssertNil(store.snoozeExpiry("A", at: now.addingTimeInterval(120)))
     }
 }
+
+// MARK: - Mute ("This is normal for me")
+
+extension SnoozeStoreTests {
+    func testMuteIsPermanentAndPersists() {
+        let store = SnoozeStore(userDefaults: defaults)
+        store.mute("Docker is using significant resources")
+        XCTAssertTrue(store.isMuted("Docker is using significant resources"))
+        let reloaded = SnoozeStore(userDefaults: defaults)
+        XCTAssertTrue(reloaded.isMuted("Docker is using significant resources"))
+        XCTAssertEqual(reloaded.mutedTitles, ["Docker is using significant resources"])
+    }
+
+    func testUnmuteRemoves() {
+        let store = SnoozeStore(userDefaults: defaults)
+        store.mute("A")
+        store.unmute("A")
+        XCTAssertFalse(store.isMuted("A"))
+        XCTAssertFalse(SnoozeStore(userDefaults: defaults).isMuted("A"))
+    }
+
+    func testMuteIsIndependentOfSnooze() {
+        let store = SnoozeStore(userDefaults: defaults)
+        store.mute("A")
+        XCTAssertFalse(store.isSnoozed("A"))
+    }
+}
