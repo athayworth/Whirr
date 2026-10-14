@@ -15,10 +15,28 @@ final class FakePinger: Pinging, @unchecked Sendable {
     }
 }
 
-struct FakeWiFi: WiFiReading {
-    var link: WiFiLink? = WiFiLink(rssi: -60, noise: -90, channel: 36, band: "5 GHz", widthMHz: 80, txRateMbps: 600, phyMode: "802.11ax")
+final class FakeWiFi: WiFiReading, @unchecked Sendable {
+    static let defaultLink = WiFiLink(rssi: -60, noise: -90, channel: 36, band: "5 GHz", widthMHz: 80, txRateMbps: 600, phyMode: "802.11ax")
+    private let lock = NSLock()
+    private var _link: WiFiLink?
+    init(link: WiFiLink? = FakeWiFi.defaultLink) { _link = link }
+    var link: WiFiLink? {
+        get { lock.withLock { _link } }
+        set { lock.withLock { _link = newValue } }
+    }
     func currentLink() -> WiFiLink? { link }
     func scanNeighbors() -> [NeighborCount] { [] }
+}
+
+/// Gateway resolver whose answer tests can change mid-run.
+final class GatewayBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: GatewayInfo?
+    init(_ v: GatewayInfo?) { _value = v }
+    var value: GatewayInfo? {
+        get { lock.withLock { _value } }
+        set { lock.withLock { _value = newValue } }
+    }
 }
 
 final class ConnectionMonitorTests: XCTestCase {
@@ -35,8 +53,11 @@ final class ConnectionMonitorTests: XCTestCase {
     }
 
     private func monitor(_ pinger: FakePinger, wifi: FakeWiFi = FakeWiFi(), gateway: GatewayInfo? = nil) -> ConnectionMonitor {
-        let g = gateway ?? gw
-        return ConnectionMonitor(pinger: pinger, wifi: wifi, store: ConnectionHistoryStore(directory: dir), gateway: { g })
+        monitor(pinger, wifi: wifi, box: GatewayBox(gateway ?? gw))
+    }
+
+    private func monitor(_ pinger: FakePinger, wifi: FakeWiFi = FakeWiFi(), box: GatewayBox) -> ConnectionMonitor {
+        ConnectionMonitor(pinger: pinger, wifi: wifi, store: ConnectionHistoryStore(directory: dir), gateway: { box.value })
     }
 
     private func rounds(_ m: ConnectionMonitor, _ n: Int, from: TimeInterval = 0) async {
@@ -116,5 +137,84 @@ final class ConnectionMonitorTests: XCTestCase {
         XCTAssertFalse(aggs.isEmpty)
         XCTAssertEqual(aggs.first?.networkId, "aa:bb")
         XCTAssertEqual(aggs.first?.channel, 36)
+    }
+
+    // MARK: Review fixes
+
+    func testWifiDropOnWifiMacIsWifiDisconnectedNotWired() {
+        let p = FakePinger(); p.set("192.168.1.1", 3); p.set("1.1.1.1", 30)
+        let wifi = FakeWiFi()
+        let m = monitor(p, wifi: wifi)
+        let exp = expectation(description: "done")
+        Task {
+            await rounds(m, 5)
+            wifi.link = nil
+            p.set("192.168.1.1", nil); p.set("1.1.1.1", nil)
+            await rounds(m, 8, from: 10)
+            let s = await m.snapshot(at: t0.addingTimeInterval(26))
+            XCTAssertFalse(s.isWired)
+            XCTAssertEqual(s.currentOutage?.cause, .wifiDisconnected)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 5)
+    }
+
+    func testGatewayChangeIsPickedUpOnTheNextRound() async {
+        let p = FakePinger(); p.set("192.168.1.1", 3); p.set("172.20.10.1", 8); p.set("1.1.1.1", 30)
+        let box = GatewayBox(gw)
+        let m = monitor(p, box: box)
+        await rounds(m, 5)
+        box.value = GatewayInfo(ip: "172.20.10.1", mac: "cc:dd")
+        await m.pingRound(at: t0.addingTimeInterval(10))
+        let s = await m.snapshot(at: t0.addingTimeInterval(10))
+        XCTAssertEqual(s.networkId, "cc:dd")
+        XCTAssertEqual(p.hostsPinged.suffix(2).sorted(), ["1.1.1.1", "172.20.10.1"])
+        XCTAssertEqual(s.gateway1m.count, 1, "home samples must not mix into the hotspot's")
+    }
+
+    func testMissingARPEntryKeepsLastMACForSameRouter() async {
+        let p = FakePinger(); p.set("192.168.1.1", 3); p.set("1.1.1.1", 30)
+        let box = GatewayBox(gw)
+        let m = monitor(p, box: box)
+        await rounds(m, 5)
+        box.value = GatewayInfo(ip: "192.168.1.1", mac: nil)
+        await rounds(m, 3, from: 10)
+        let s = await m.snapshot(at: t0.addingTimeInterval(14))
+        XCTAssertEqual(s.networkId, "aa:bb")
+        XCTAssertEqual(s.gateway1m.count, 8)
+    }
+
+    func testRouterRebootLeavesNoSpikesAfterRecovery() async {
+        let p = FakePinger(); p.set("192.168.1.1", 3); p.set("1.1.1.1", 30)
+        let m = monitor(p)
+        await rounds(m, 5)
+        p.set("192.168.1.1", nil); p.set("1.1.1.1", nil)
+        await rounds(m, 30, from: 10)           // 60 s reboot → outage
+        p.set("192.168.1.1", 3); p.set("1.1.1.1", 30)
+        await rounds(m, 10, from: 70)
+        let s = await m.snapshot(at: t0.addingTimeInterval(88))
+        XCTAssertNil(s.currentOutage)
+        XCTAssertEqual(s.gateway10m.spikes, 0)
+        XCTAssertEqual(s.internet10m.lossPercent, 0)
+    }
+
+    func testShortBlipStillCountsAsSpikes() async {
+        let p = FakePinger(); p.set("192.168.1.1", 3); p.set("1.1.1.1", 30)
+        let m = monitor(p)
+        await rounds(m, 5)
+        p.set("192.168.1.1", nil); p.set("1.1.1.1", nil)
+        await rounds(m, 3, from: 10)            // 6 s — not an outage
+        p.set("192.168.1.1", 3); p.set("1.1.1.1", 30)
+        await rounds(m, 5, from: 16)
+        let s = await m.snapshot(at: t0.addingTimeInterval(24))
+        XCTAssertEqual(s.gateway10m.spikes, 3)
+    }
+
+    func testUnconfirmedRouterPlusInternetDownIsNotBlamedOnRouter() async {
+        let p = FakePinger()                     // nothing answers from the start
+        let m = monitor(p)
+        await rounds(m, 8)
+        let s = await m.snapshot(at: t0.addingTimeInterval(14))
+        XCTAssertEqual(s.currentOutage?.cause, .unknown)
     }
 }

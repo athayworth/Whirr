@@ -57,12 +57,13 @@ public enum VerdictSelector {
                        areaSeverity: areaSeverity, pending: pending)
     }
 
-    /// Severity, then duration (the long-running problem is the one the
-    /// user is feeling, and it keeps the headline from flapping), then
-    /// narratives (they explain several signals at once), then title so
-    /// the order is deterministic tick to tick.
+    /// Peak severity in the current streak (so a problem dipping
+    /// critical→warning→critical doesn't flap the headline), then
+    /// duration (the long-running problem is the one the user is
+    /// feeling), then narratives (they explain several signals at once),
+    /// then title so the order is deterministic tick to tick.
     static func isMoreImportant(_ a: DiagnosisContext, _ b: DiagnosisContext) -> Bool {
-        if a.diagnosis.severity != b.diagnosis.severity { return a.diagnosis.severity > b.diagnosis.severity }
+        if a.peakSeverity != b.peakSeverity { return a.peakSeverity > b.peakSeverity }
         if a.durationSeconds != b.durationSeconds { return a.durationSeconds > b.durationSeconds }
         let aNarrative = a.diagnosis.kind == .narrative
         let bNarrative = b.diagnosis.kind == .narrative

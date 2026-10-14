@@ -18,8 +18,9 @@ final class ConnectionReportCardTests: XCTestCase {
             link: link ?? self.link, neighbors: neighbors)
     }
 
-    private func row(_ id: String, _ r: ConnectionTestResult, gateway: HopStats? = nil, internet: HopStats? = nil) -> ReportRow {
-        ConnectionReportCard.rows(for: r, passiveGateway: gateway ?? hop(), passiveInternet: internet ?? hop())
+    private func row(_ id: String, _ r: ConnectionTestResult, gateway: HopStats? = nil, internet: HopStats? = nil,
+                     isWired: Bool = false) -> ReportRow {
+        ConnectionReportCard.rows(for: r, passiveGateway: gateway ?? hop(), passiveInternet: internet ?? hop(), isWired: isWired)
             .first { $0.id == id }!
     }
 
@@ -87,5 +88,27 @@ final class ConnectionReportCardTests: XCTestCase {
         let l = WiFiLink(rssi: -50, noise: -90, channel: 6, band: "2.4 GHz", widthMHz: 20, txRateMbps: 100, phyMode: "802.11n")
         let n = [NeighborCount(channel: 6, band: "2.4 GHz", count: 8), NeighborCount(channel: 1, band: "2.4 GHz", count: 4)]
         XCTAssertTrue(row("crowding", result(link: .some(l), neighbors: n)).fix?.contains("11") ?? false)
+    }
+
+    func testStabilityDoesNotClaimWifiIsFineWithoutRouterData() {
+        let r = row("stability", result(), gateway: .empty, internet: hop(spikes: 14))
+        XCTAssertEqual(r.grade, .poor)
+        XCTAssertFalse(r.explanation.contains("steady"), r.explanation)
+        XCTAssertFalse(r.fix?.contains("provider's side") ?? false)
+    }
+
+    func testStabilityOnWiredMacDoesNotMentionWifi() {
+        let r = row("stability", result(link: .some(nil)), gateway: hop(spikes: 14), isWired: true)
+        XCTAssertFalse(r.explanation.contains("Wi-Fi"), r.explanation)
+    }
+
+    func testUnderLoadMakesNoAttributionWithoutRouterSamples() {
+        var r = result(idle: 21, loaded: 228)
+        r = ConnectionTestResult(at: r.at, networkId: r.networkId, nq: r.nq, gatewayIdle: .empty,
+                                 gatewayLoaded: .empty, link: r.link, neighbors: r.neighbors)
+        let u = row("underLoad", r)
+        XCTAssertEqual(u.grade, .poor)
+        XCTAssertFalse(u.explanation.contains("not your Wi-Fi"), u.explanation)
+        XCTAssertFalse(u.explanation.contains("happens on your Wi-Fi"), u.explanation)
     }
 }

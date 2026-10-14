@@ -140,4 +140,13 @@ final class DiagnosisDurationTrackerTests: XCTestCase {
         XCTAssertEqual(byTitle["B"]?.durationSeconds, 0,
                        "New title should start at zero even when others are running")
     }
+
+    func testContextExposesPeakSeverityWithinStreak() {
+        var tracker = DiagnosisDurationTracker()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        _ = tracker.annotate([Diagnosis(title: "M", detail: "", severity: .warning)], now: t0)
+        _ = tracker.annotate([Diagnosis(title: "M", detail: "", severity: .critical)], now: t0.addingTimeInterval(3))
+        let out = tracker.annotate([Diagnosis(title: "M", detail: "", severity: .warning)], now: t0.addingTimeInterval(6))
+        XCTAssertEqual(out.contexts.first?.peakSeverity, .critical)
+    }
 }

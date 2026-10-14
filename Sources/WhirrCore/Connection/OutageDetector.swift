@@ -8,6 +8,9 @@ public enum OutageCause: String, Codable, Sendable {
     case isp
     /// The Mac lost its Wi-Fi association.
     case wifiDisconnected
+    /// Nothing answered, and the router has never been confirmed to
+    /// answer pings — so Whirr can't say which side failed.
+    case unknown
 }
 
 public struct OutageRecord: Codable, Sendable, Equatable, Identifiable {
@@ -37,13 +40,15 @@ public struct OutageDetector: Sendable {
     public static let sleepGap: TimeInterval = 30
 
     public private(set) var current: OutageRecord?
+    /// Failing, but not for long enough to call it an outage yet.
+    public var isPending: Bool { pendingSince != nil }
     private var pendingSince: Date?
     private var lastAt: Date?
 
     public init() {}
 
-    /// - Parameter gatewayOK: nil when the router doesn't answer pings at
-    ///   all (some block ICMP) — then only the internet hop is judged.
+    /// - Parameter gatewayOK: nil when the router hasn't been confirmed to
+    ///   answer pings (some block ICMP) — then failures are `.unknown`.
     public mutating func observe(
         gatewayOK: Bool?,
         internetOK: Bool,
@@ -89,6 +94,11 @@ public struct OutageDetector: Sendable {
         // (a wired Mac has no Wi-Fi association at all).
         if internetOK { return nil }
         if !wifiAssociated { return .wifiDisconnected }
-        return gatewayOK == false ? .router : .isp
+        switch gatewayOK {
+        case .some(false): return .router
+        case .some(true): return .isp
+        // Router unverified: claiming either side would be a guess.
+        case .none: return .unknown
+        }
     }
 }

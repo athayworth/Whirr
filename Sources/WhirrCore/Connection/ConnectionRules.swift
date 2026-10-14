@@ -149,6 +149,9 @@ struct OutageRule: Rule {
         case .wifiDisconnected:
             detail = "Your Mac lost its Wi-Fi connection."
             howTo = .routerOutage
+        case .unknown:
+            detail = "Nothing beyond your Mac is reachable. Your router doesn't answer Whirr's checks, so Whirr can't tell whether the router or the internet line is at fault."
+            howTo = .connectionDown
         }
         return Diagnosis(
             title: ConnectionTitles.outage,

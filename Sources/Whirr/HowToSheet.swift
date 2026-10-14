@@ -123,6 +123,17 @@ struct HowToContent {
                 ],
                 note: "After a restart, routers on automatic channel selection may pick a different Wi-Fi channel."
             )
+        case .connectionDown:
+            return HowToContent(
+                title: "Your connection is down",
+                intro: "Nothing beyond your Mac is answering. Whirr can't tell yet whether the router or the internet line is at fault, because your router hasn't answered its checks.",
+                steps: [
+                    "Check whether other devices at home are also offline. If only this Mac is, turn Wi-Fi off and on.",
+                    "Check your provider's app or website for a reported outage in your area.",
+                    "If there's no reported outage, unplug the router for 30 seconds, plug it back in, and wait two to three minutes."
+                ],
+                note: "Whirr logs when this starts and ends, in Connection → Outages."
+            )
         case .ispOutage:
             return HowToContent(
                 title: "Your internet line is down",

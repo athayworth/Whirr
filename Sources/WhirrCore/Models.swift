@@ -460,6 +460,10 @@ public struct DiagnosisContext: Sendable, Hashable, Identifiable {
     public let isSnoozed: Bool
     /// Wall-clock time the snooze expires (nil when not snoozed).
     public let snoozedUntil: Date?
+    /// Highest severity reached in the current streak. Ranking by this
+    /// rather than the instantaneous severity keeps a long-running
+    /// problem that dips warning↔critical from flapping the headline.
+    public let peakSeverity: Severity
 
     public init(
         diagnosis: Diagnosis,
@@ -467,8 +471,10 @@ public struct DiagnosisContext: Sendable, Hashable, Identifiable {
         durationSeconds: Int,
         trend: Trend,
         isSnoozed: Bool = false,
-        snoozedUntil: Date? = nil
+        snoozedUntil: Date? = nil,
+        peakSeverity: Severity? = nil
     ) {
+        self.peakSeverity = max(peakSeverity ?? diagnosis.severity, diagnosis.severity)
         self.diagnosis = diagnosis
         self.firstSeenAt = firstSeenAt
         self.durationSeconds = durationSeconds

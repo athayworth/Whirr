@@ -78,7 +78,7 @@ final class OutageDetectorTests: XCTestCase {
         // Review Focus 3: routers that drop ICMP report gatewayOK == nil.
         var d = OutageDetector()
         let r = run(&d, from: 0, to: 12, gateway: nil, internet: false)
-        XCTAssertEqual(r.opened.first?.cause, .isp)
+        XCTAssertEqual(r.opened.first?.cause, .unknown, "router unverified — can't claim the line is at fault either")
         var healthy = OutageDetector()
         XCTAssertTrue(run(&healthy, from: 0, to: 30, gateway: nil, internet: true).opened.isEmpty)
     }

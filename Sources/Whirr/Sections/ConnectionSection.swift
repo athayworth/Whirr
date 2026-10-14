@@ -60,7 +60,8 @@ struct ConnectionSection: View {
                 VStack(spacing: 8) {
                     ForEach(ConnectionReportCard.rows(for: test,
                                                       passiveGateway: monitor.connection.gateway10m,
-                                                      passiveInternet: monitor.connection.internet10m)) { row in
+                                                      passiveInternet: monitor.connection.internet10m,
+                                                      isWired: monitor.connection.isWired)) { row in
                         ReportRowView(row: row)
                     }
                 }

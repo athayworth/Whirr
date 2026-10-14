@@ -71,3 +71,16 @@ extension ConnectionHistoryStoreTests {
         XCTAssertEqual(tests.last?.at, t0.addingTimeInterval(54))
     }
 }
+
+extension ConnectionHistoryStoreTests {
+    func testCloseDanglingOutagesEndsOpenRecords() {
+        let store = ConnectionHistoryStore(directory: dir)
+        store.appendOutage(OutageRecord(start: t0, cause: .isp, networkId: "home"))
+        store.appendOutage(OutageRecord(start: t0, end: t0.addingTimeInterval(20), cause: .router, networkId: "home"))
+        store.closeDanglingOutages(at: t0.addingTimeInterval(300))
+        let all = store.outages()
+        XCTAssertTrue(all.allSatisfy { $0.end != nil })
+        XCTAssertEqual(all.first?.end, t0.addingTimeInterval(300))
+        XCTAssertEqual(all.last?.end, t0.addingTimeInterval(20))
+    }
+}

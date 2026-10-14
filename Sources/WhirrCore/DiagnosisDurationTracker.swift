@@ -114,7 +114,8 @@ public struct DiagnosisDurationTracker {
                 diagnosis: diagnosis,
                 firstSeenAt: updated.firstSeenAt,
                 durationSeconds: max(0, duration),
-                trend: trend
+                trend: trend,
+                peakSeverity: updated.peakSeverity
             ))
         }
         return AnnotationResult(contexts: contexts, closedIncidents: closed)

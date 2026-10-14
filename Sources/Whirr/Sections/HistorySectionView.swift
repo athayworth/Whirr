@@ -87,6 +87,7 @@ enum OutageText {
         case .router: return "Router stopped responding"
         case .isp: return "Internet line down"
         case .wifiDisconnected: return "Wi-Fi disconnected"
+        case .unknown: return "Connection down (router not checked)"
         }
     }
 

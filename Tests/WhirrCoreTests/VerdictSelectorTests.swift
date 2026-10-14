@@ -9,14 +9,16 @@ final class VerdictSelectorTests: XCTestCase {
         tier: Diagnosis.Tier = .problem,
         area: Diagnosis.Area = .mac,
         kind: Diagnosis.Kind = .standalone,
-        action: SuggestedAction? = nil
+        action: SuggestedAction? = nil,
+        peak: Severity? = nil
     ) -> DiagnosisContext {
         DiagnosisContext(
             diagnosis: Diagnosis(title: title, detail: "", severity: severity, kind: kind,
                                  tier: tier, area: area, action: action),
             firstSeenAt: Date(timeIntervalSince1970: 0),
             durationSeconds: seconds,
-            trend: .stable
+            trend: .stable,
+            peakSeverity: peak
         )
     }
 
@@ -96,5 +98,14 @@ final class VerdictSelectorTests: XCTestCase {
 
     func testHiddenYoungProblemIsNotPending() {
         XCTAssertTrue(select([ctx("young", seconds: 10)], hidden: ["young"]).pending.isEmpty)
+    }
+
+    func testOscillatingSeverityDoesNotFlapTheHeadline() {
+        // Review Focus 5: a long-running problem dipping to warning must not
+        // hand the headline to a newer steady critical and back each tick.
+        let dipped = select([ctx("memory", .warning, seconds: 1200, peak: .critical), ctx("disk", .critical, seconds: 300)])
+        let peaked = select([ctx("memory", .critical, seconds: 1203, peak: .critical), ctx("disk", .critical, seconds: 303)])
+        XCTAssertEqual(dipped.headline?.diagnosis.title, "memory")
+        XCTAssertEqual(peaked.headline?.diagnosis.title, "memory")
     }
 }

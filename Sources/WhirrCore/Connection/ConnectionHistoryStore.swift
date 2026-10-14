@@ -101,6 +101,20 @@ public final class ConnectionHistoryStore: @unchecked Sendable {
         }
     }
 
+    /// Closes outages left open by a quit, crash or reboot, so they don't
+    /// read as "ongoing" forever (or in the summary for the provider).
+    public func closeDanglingOutages(at end: Date) {
+        lock.withLock {
+            let all = readOutages()
+            guard all.contains(where: { $0.end == nil }) else { return }
+            writeOutages(all.map { o in
+                var o = o
+                if o.end == nil { o.end = max(end, o.start) }
+                return o
+            })
+        }
+    }
+
     public func outages() -> [OutageRecord] {
         lock.withLock { readOutages() }
     }

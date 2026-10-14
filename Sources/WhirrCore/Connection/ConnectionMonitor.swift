@@ -50,7 +50,6 @@ public actor ConnectionMonitor {
     /// conclude the router ignores pings: 30 × 2 s = 60 s.
     static let unpingableAfterRounds = 30
     static let fallbackAfterFailures = 30
-    static let gatewayRefreshRounds = 30
     static let primaryInternetHost = "1.1.1.1"
     static let fallbackInternetHost = "8.8.8.8"
 
@@ -62,7 +61,12 @@ public actor ConnectionMonitor {
     private var stats = ConnectionStats()
     private var outages = OutageDetector()
     private var gateway: GatewayInfo?
-    private var roundsSinceGatewayRefresh = 0
+    /// Pings taken while failing but before an outage is confirmed. If
+    /// the failure becomes an outage they're dropped — otherwise a router
+    /// reboot's timeouts would read as "spiky Wi-Fi" for 10 minutes after
+    /// and skew the channel history. If it recovers, they're kept (a
+    /// short blip is a real stall).
+    private var pendingSamples: [PingSample] = []
     private var lastLink: WiFiLink?
     private var paused = false
     private var loop: Task<Void, Never>?
@@ -71,6 +75,9 @@ public actor ConnectionMonitor {
     private var networkId: String?
     private var roundsOnNetwork = 0
     private var gatewayEverAnswered = false
+    /// A Wi-Fi link was seen on this network — so a missing link later
+    /// means Wi-Fi dropped, not that the Mac is wired.
+    private var wifiSeenOnNetwork = false
     private var internetEverAnswered = false
     private var gatewayPingable = true
     private var internetHost = ConnectionMonitor.primaryInternetHost
@@ -93,6 +100,10 @@ public actor ConnectionMonitor {
     public func start() {
         guard loop == nil else { return }
         store.purge(olderThan: Date().addingTimeInterval(-ConnectionHistoryStore.retention))
+        // An outage open when the app last quit can't be "ongoing" now.
+        // The last minute written is the last moment we know about.
+        let lastKnown = store.aggregates(since: Date().addingTimeInterval(-86_400)).last?.minute
+        store.closeDanglingOutages(at: lastKnown.map { $0.addingTimeInterval(60) } ?? Date())
         loop = Task { [weak self] in
             var next = ContinuousClock.now
             while !Task.isCancelled {
@@ -128,12 +139,12 @@ public actor ConnectionMonitor {
         )
     }
 
-    private var isWired: Bool { lastLink == nil && gatewayEverAnswered }
+    private var isWired: Bool { lastLink == nil && gatewayEverAnswered && !wifiSeenOnNetwork }
 
     /// One 2-second iteration. Exposed for tests, which drive time.
     public func pingRound(at now: Date) async {
         guard !paused else { return }
-        refreshGatewayIfDue()
+        refreshGateway()
         lastLink = wifi.currentLink()
 
         let gatewayIP = gateway?.ip
@@ -145,6 +156,7 @@ public actor ConnectionMonitor {
         let id = gateway?.networkId ?? networkId ?? "unknown"
         if id != networkId { resetNetworkState(id) }
         roundsOnNetwork += 1
+        if lastLink != nil { wifiSeenOnNetwork = true }
         if g != nil { gatewayEverAnswered = true }
         if i != nil { internetEverAnswered = true }
         if !gatewayEverAnswered && internetEverAnswered && roundsOnNetwork >= Self.unpingableAfterRounds {
@@ -152,13 +164,8 @@ public actor ConnectionMonitor {
         }
         trackInternetHostFallback(gatewayOK: g != nil, internetOK: i != nil)
 
-        if gatewayPingable {
-            stats.record(PingSample(at: now, hop: .gateway, rttMs: g), networkId: id)
-        }
-        stats.record(PingSample(at: now, hop: .internet, rttMs: i), networkId: id)
-
         let result = outages.observe(
-            gatewayOK: gatewayPingable ? (g != nil) : nil,
+            gatewayOK: gatewayPingable && gatewayEverAnswered ? (g != nil) : nil,
             internetOK: i != nil,
             wifiAssociated: lastLink != nil || isWired,
             at: now,
@@ -167,22 +174,45 @@ public actor ConnectionMonitor {
         if let closed = result.closed { store.updateOutage(closed) }
         if let opened = result.opened { store.appendOutage(opened) }
 
+        var samples = [PingSample(at: now, hop: .internet, rttMs: i)]
+        if gatewayPingable { samples.insert(PingSample(at: now, hop: .gateway, rttMs: g), at: 0) }
+        if outages.current != nil {
+            pendingSamples.removeAll()
+        } else if outages.isPending {
+            pendingSamples += samples
+        } else {
+            for sample in pendingSamples + samples { stats.record(sample, networkId: id) }
+            pendingSamples.removeAll()
+        }
+
         writeMinuteAggregateIfDue(now: now, networkId: id)
         lastRoundAt = now
     }
 
-    private func refreshGatewayIfDue() {
-        if gateway == nil || roundsSinceGatewayRefresh >= Self.gatewayRefreshRounds {
-            gateway = resolveGateway()
-            roundsSinceGatewayRefresh = 0
+    /// Re-resolved every round (one SCDynamicStore read + one ARP sysctl)
+    /// so a network switch is picked up within 2 s, before any of the new
+    /// network's pings are filed under the old one.
+    private func refreshGateway() {
+        guard let fresh = resolveGateway() else {
+            gateway = nil
+            return
         }
-        roundsSinceGatewayRefresh += 1
+        // A cold ARP entry briefly hides the router's MAC. Same IP as
+        // before means same router — keep its identity instead of
+        // flapping to the IP and splitting history.
+        if fresh.mac == nil, let previous = gateway, previous.ip == fresh.ip {
+            gateway = previous
+        } else {
+            gateway = fresh
+        }
     }
 
     private func resetNetworkState(_ id: String) {
         networkId = id
         roundsOnNetwork = 0
         gatewayEverAnswered = false
+        wifiSeenOnNetwork = false
+        pendingSamples.removeAll()
         internetEverAnswered = false
         gatewayPingable = true
         internetHost = Self.primaryInternetHost

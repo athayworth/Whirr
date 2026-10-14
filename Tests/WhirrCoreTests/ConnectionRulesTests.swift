@@ -95,4 +95,10 @@ final class ConnectionRulesTests: XCTestCase {
         let out = RulesEngine(config: config).evaluate(snapshot: .empty, processes: [], connection: snap(gateway: hop(spikes: 50)))
         XCTAssertTrue(out.filter { $0.area == .connection }.isEmpty)
     }
+
+    func testUnknownOutageUsesNeutralCopy() {
+        let d = find(ConnectionTitles.outage, snap(outage: OutageRecord(start: Date(), cause: .unknown, networkId: "home")))
+        XCTAssertEqual(d?.action?.kind, .showHowTo(.connectionDown))
+        XCTAssertFalse(d?.detail.contains("router is fine") ?? true)
+    }
 }

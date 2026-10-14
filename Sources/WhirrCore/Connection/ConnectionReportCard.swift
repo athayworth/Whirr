@@ -20,8 +20,9 @@ public enum ConnectionReportCard {
     static let nonDFS5GHz = [36, 40, 44, 48]
     static let channels24GHz = [1, 6, 11]
 
-    public static func rows(for r: ConnectionTestResult, passiveGateway: HopStats, passiveInternet: HopStats) -> [ReportRow] {
-        [speed(r), stability(gateway: passiveGateway, internet: passiveInternet), underLoad(r), crowding(r)]
+    public static func rows(for r: ConnectionTestResult, passiveGateway: HopStats, passiveInternet: HopStats,
+                            isWired: Bool = false) -> [ReportRow] {
+        [speed(r), stability(gateway: passiveGateway, internet: passiveInternet, isWired: isWired), underLoad(r), crowding(r)]
     }
 
     static func speed(_ r: ConnectionTestResult) -> ReportRow {
@@ -38,7 +39,7 @@ public enum ConnectionReportCard {
         )
     }
 
-    static func stability(gateway: HopStats, internet: HopStats) -> ReportRow {
+    static func stability(gateway: HopStats, internet: HopStats, isWired: Bool = false) -> ReportRow {
         guard gateway.count >= 30 || internet.count >= 30 else {
             return ReportRow(id: "stability", title: "Stability", grade: .unknown,
                              explanation: "Whirr needs a few minutes of background watching to judge stability.", fix: nil)
@@ -50,11 +51,21 @@ public enum ConnectionReportCard {
             return .poor
         }
         let g = grade(gateway), i = grade(internet)
+        let link = isWired ? "Your Mac's link to the router" : "Your Mac's Wi-Fi link to the router"
         if g != .good {
             return ReportRow(
                 id: "stability", title: "Stability", grade: g,
-                explanation: "Your Mac's Wi-Fi link to the router stalled \(gateway.spikes) times in the last 10 minutes.",
-                fix: "Move the router to a less crowded channel (see Wi-Fi crowding below)."
+                explanation: "\(link) stalled \(gateway.spikes) times in the last 10 minutes.",
+                fix: isWired ? "Check the cable and the router." : "Move the router to a less crowded channel (see Wi-Fi crowding below)."
+            )
+        }
+        // Without router-hop data (router ignores pings), "Wi-Fi is fine"
+        // would be a guess — say only what was measured.
+        if i != .good && gateway.count < 30 {
+            return ReportRow(
+                id: "stability", title: "Stability", grade: i,
+                explanation: "Your connection stalled \(internet.spikes) times in the last 10 minutes. Your router doesn't answer Whirr's checks, so Whirr can't tell whether that's Wi-Fi or your provider.",
+                fix: "If other devices at home stall too, it's more likely your provider."
             )
         }
         if i != .good {
@@ -79,7 +90,14 @@ public enum ConnectionReportCard {
         guard grade != .good else {
             return ReportRow(id: "underLoad", title: "Under load", grade: grade, explanation: summary, fix: nil)
         }
-        let gwDelta = max(0, (r.gatewayLoaded.medianMs ?? 0) - (r.gatewayIdle.medianMs ?? 0))
+        guard let gwIdle = r.gatewayIdle.medianMs, let gwLoaded = r.gatewayLoaded.medianMs else {
+            return ReportRow(
+                id: "underLoad", title: "Under load", grade: grade,
+                explanation: summary,
+                fix: "Pause big downloads while gaming, and lower your game-streaming quality a notch."
+            )
+        }
+        let gwDelta = max(0, gwLoaded - gwIdle)
         if gwDelta >= delta * 0.5 {
             return ReportRow(
                 id: "underLoad", title: "Under load", grade: grade,
