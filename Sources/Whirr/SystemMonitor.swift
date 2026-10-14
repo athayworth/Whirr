@@ -9,6 +9,9 @@ final class SystemMonitor {
     /// snoozed items out for display; header severity + notifications
     /// also skip them.
     var diagnosisContexts: [DiagnosisContext] = []
+    /// Overview headline + per-area status, recomputed each tick from
+    /// `diagnosisContexts` minus snoozed/muted findings.
+    var verdict: Verdict = .allClear
     /// "Can I keep going?" summary shown at the top of the menu.
     var headroom: HeadroomAssessment = .empty
     var topProcesses: [ProcessSample] = []
@@ -98,17 +101,21 @@ final class SystemMonitor {
         }
     }
 
-    /// Worst severity across *unsnoozed* contexts. Snoozed diagnoses
-    /// don't drive the header color — that's the whole point of snooze:
-    /// the user has said "I know, I don't want to be reminded."
-    var worstSeverity: Severity {
-        visibleDiagnoses.map(\.severity).max() ?? .ok
+    /// Worst severity across gated, visible *problems* (see
+    /// `VerdictSelector`). Notes and young problems don't color the
+    /// icon — that's what keeps it from crying wolf.
+    var worstSeverity: Severity { verdict.worst }
+
+    /// Snoozed or muted — hidden from the primary UI, the icon and
+    /// notifications.
+    func isHidden(_ title: String) -> Bool {
+        snoozeStore.isSnoozed(title) || snoozeStore.isMuted(title)
     }
 
-    /// The diagnosis list rendered in the menu — minus anything snoozed.
+    /// The diagnosis list rendered in sections — minus anything hidden.
     var visibleDiagnoses: [Diagnosis] {
         diagnosisContexts
-            .filter { !snoozeStore.isSnoozed($0.diagnosis.title) }
+            .filter { !isHidden($0.diagnosis.title) }
             .map(\.diagnosis)
     }
 
@@ -184,6 +191,9 @@ final class SystemMonitor {
             .prefix(5)
             .filter { $0.memoryBytes >= 500 * 1_048_576 }
         self.diagnosisContexts = result.diagnosisContexts
+        self.verdict = VerdictSelector.select(result.diagnosisContexts, isHidden: { [snoozeStore] title in
+            snoozeStore.isSnoozed(title) || snoozeStore.isMuted(title)
+        })
         self.headroom = result.headroom
         self.harbrStatuses = result.harbrStatuses
         // `uniquingKeysWith` over `uniqueKeysWithValues` — duplicate pids
@@ -200,7 +210,7 @@ final class SystemMonitor {
         // Snoozed diagnoses don't drive worstSeverity for the header — the
         // history strip uses the *visible* worst severity for the same
         // reason (a snoozed critical shouldn't paint the strip red).
-        let worst = visibleDiagnoses.map(\.severity).max() ?? .ok
+        let worst = verdict.worst
         inMemoryHistory.append(TrendPoint(
             capturedAt: Date(),
             memoryPressure: result.snapshot.memoryPressure,
@@ -218,13 +228,12 @@ final class SystemMonitor {
             : inMemoryHistory
 
         self.lastUpdated = Date()
-        // Notifications also skip snoozed diagnoses — the user has said
-        // "don't alert me on this" and a critical-firing snoozed rule
-        // shouldn't ping them.
-        let unsnoozed = result.diagnosisContexts
-            .filter { !snoozeStore.isSnoozed($0.diagnosis.title) }
+        // Notifications only for problems that pass the notify gate
+        // (critical, ≥ 5 min, actionable) and aren't snoozed or muted.
+        let notifiable = result.diagnosisContexts
+            .filter { !isHidden($0.diagnosis.title) && VerdictSelector.shouldNotify($0) }
             .map(\.diagnosis)
-        notifications.process(unsnoozed)
+        notifications.process(notifiable)
     }
 }
 
