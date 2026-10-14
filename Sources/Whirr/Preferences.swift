@@ -17,6 +17,7 @@ enum Preferences {
         static let notifyOnRecovery        = "preferences.notifyOnRecovery"
         static let compactMode             = "preferences.compactMode"
         static let hasCompletedOnboarding  = "preferences.hasCompletedOnboarding"
+        static let alwaysShowDeveloper     = "preferences.alwaysShowDeveloper"
     }
 
     // MARK: - Sampling cadence
@@ -79,6 +80,11 @@ enum Preferences {
     /// existing users don't see a UI change without opting in. Compact
     /// mode drops duration/trend badges, tightens process rows, and caps
     /// the Top-processes list to 4 rows — meaningfully shorter menu.
+    /// Show the Developer section even when no Docker/Harbr is detected.
+    static var alwaysShowDeveloper: Bool {
+        UserDefaults.standard.bool(forKey: Key.alwaysShowDeveloper)
+    }
+
     static let defaultCompactMode = false
 
     static var compactMode: Bool {

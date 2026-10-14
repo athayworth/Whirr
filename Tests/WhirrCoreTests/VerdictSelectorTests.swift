@@ -85,4 +85,16 @@ final class VerdictSelectorTests: XCTestCase {
         XCTAssertFalse(VerdictSelector.shouldNotify(ctx("A", .critical, seconds: 300)))
         XCTAssertFalse(VerdictSelector.shouldNotify(ctx("A", .critical, seconds: 300, tier: .note, action: act)))
     }
+
+    func testYoungProblemsArePendingNotAllClear() {
+        let v = select([ctx("young", .critical, seconds: 10), ctx("note", seconds: 10, tier: .note)])
+        XCTAssertNil(v.headline)
+        XCTAssertEqual(v.pending.map(\.diagnosis.title), ["young"])
+        XCTAssertFalse(v.isAllClear)
+        XCTAssertTrue(select([]).isAllClear)
+    }
+
+    func testHiddenYoungProblemIsNotPending() {
+        XCTAssertTrue(select([ctx("young", seconds: 10)], hidden: ["young"]).pending.isEmpty)
+    }
 }

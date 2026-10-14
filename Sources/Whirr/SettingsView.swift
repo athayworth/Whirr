@@ -15,6 +15,9 @@ struct SettingsView: View {
     /// pipeline writes into, i.e., recent incidents show up immediately
     /// without a file re-read.
     let incidentLog: IncidentLog
+    /// Holds permanent "This is normal for me" mutes, listed in the
+    /// Quieted tab so they can be undone.
+    let snoozeStore: SnoozeStore
 
     @AppStorage(Preferences.Key.samplingIntervalSeconds) private var samplingInterval =
         Preferences.defaultSamplingIntervalSeconds
@@ -26,6 +29,7 @@ struct SettingsView: View {
         Preferences.defaultNotifyOnRecovery
     @AppStorage(Preferences.Key.compactMode) private var compactMode =
         Preferences.defaultCompactMode
+    @AppStorage(Preferences.Key.alwaysShowDeveloper) private var alwaysShowDeveloper = false
 
     /// SwiftUI's Slider on the macOS 26 SDK has a long preferred initializer
     /// that breaks overload resolution when you also pass `step:`. We bind
@@ -50,18 +54,14 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             notifications
                 .tabItem { Label("Notifications", systemImage: "bell") }
-            InsightsView(log: incidentLog)
-                .tabItem { Label("Insights", systemImage: "chart.bar.xaxis") }
+            quieted
+                .tabItem { Label("Quieted", systemImage: "speaker.slash") }
             rules
                 .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
             about
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        // Wider + taller than a typical Settings panel because Insights
-        // packs multiple charts + a scrollable incident list. The panel
-        // itself is resizable — a MacBook Air user can shrink it, a
-        // Studio Display user can grow it to see everything at once.
-        .frame(minWidth: 560, idealWidth: 640, minHeight: 500, idealHeight: 620)
+        .frame(minWidth: 560, idealWidth: 600, minHeight: 440, idealHeight: 520)
     }
 
     // MARK: - General
@@ -94,8 +94,15 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Compact menu", isOn: $compactMode)
-                Text("Drops the duration/trend badges and shrinks process rows for a shorter menu. Detailed mode (the default) keeps everything visible so you can see how long each condition has been active and which direction it's trending.")
+                Toggle("Compact process rows", isOn: $compactMode)
+                Text("Shrinks the rows in Mac → What's using your Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Always show the Developer section", isOn: $alwaysShowDeveloper)
+                Text("The Developer section (Docker containers, dev servers) appears automatically when Whirr detects them.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -110,13 +117,42 @@ struct SettingsView: View {
         .padding(.top, 8)
     }
 
+    // MARK: - Quieted
+
+    private var quieted: some View {
+        Form {
+            Section {
+                if snoozeStore.mutedTitles.isEmpty {
+                    Text("Nothing is quieted. Use \"This is normal for me\" on any finding to stop Whirr bringing it up.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(snoozeStore.mutedTitles, id: \.self) { title in
+                        HStack {
+                            Text(title)
+                            Spacer()
+                            Button("Show again") { snoozeStore.unmute(title) }
+                        }
+                    }
+                }
+            } header: {
+                Text("Marked \"normal for me\"")
+            } footer: {
+                Text("These findings still appear, dimmed, inside their section — they just never headline, color the menu bar icon, or notify.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.top, 8)
+    }
+
     // MARK: - Notifications
 
     private var notifications: some View {
         Form {
             Section {
                 Toggle("Notify on new critical diagnoses", isOn: $notificationsEnabled)
-                Text("Whirr posts a macOS notification the first time a diagnosis becomes critical. A per-condition cooldown stops flapping problems from spamming you.")
+                Text("Whirr only notifies for serious problems that have lasted at least 5 minutes and have something you can do about them. A per-condition cooldown stops flapping problems from spamming you.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -8,15 +8,22 @@ public struct Verdict: Sendable, Equatable {
     public let also: [DiagnosisContext]
     /// Worst gated-problem severity per sidebar area. Missing = fine.
     public let areaSeverity: [Diagnosis.Area: Severity]
+    /// Visible problems still inside the gate. Not loud yet, but their
+    /// presence means "all clear" would be a false reassurance — every
+    /// problem is young right after launch.
+    public let pending: [DiagnosisContext]
 
     public var worst: Severity { areaSeverity.values.max() ?? .ok }
+    public var isAllClear: Bool { headline == nil && pending.isEmpty }
 
     public static let allClear = Verdict(headline: nil, also: [], areaSeverity: [:])
 
-    public init(headline: DiagnosisContext?, also: [DiagnosisContext], areaSeverity: [Diagnosis.Area: Severity]) {
+    public init(headline: DiagnosisContext?, also: [DiagnosisContext],
+                areaSeverity: [Diagnosis.Area: Severity], pending: [DiagnosisContext] = []) {
         self.headline = headline
         self.also = also
         self.areaSeverity = areaSeverity
+        self.pending = pending
     }
 }
 
@@ -33,18 +40,21 @@ public enum VerdictSelector {
         _ contexts: [DiagnosisContext],
         isHidden: (String) -> Bool
     ) -> Verdict {
-        let gated = contexts
-            .filter {
-                $0.diagnosis.tier == .problem
-                    && $0.durationSeconds >= iconGateSeconds
-                    && !isHidden($0.diagnosis.title)
-            }
+        let visibleProblems = contexts.filter {
+            $0.diagnosis.tier == .problem && !isHidden($0.diagnosis.title)
+        }
+        let gated = visibleProblems
+            .filter { $0.durationSeconds >= iconGateSeconds }
+            .sorted(by: isMoreImportant)
+        let pending = visibleProblems
+            .filter { $0.durationSeconds < iconGateSeconds }
             .sorted(by: isMoreImportant)
         var areaSeverity: [Diagnosis.Area: Severity] = [:]
         for c in gated {
             areaSeverity[c.diagnosis.area] = max(areaSeverity[c.diagnosis.area] ?? .ok, c.diagnosis.severity)
         }
-        return Verdict(headline: gated.first, also: Array(gated.dropFirst()), areaSeverity: areaSeverity)
+        return Verdict(headline: gated.first, also: Array(gated.dropFirst()),
+                       areaSeverity: areaSeverity, pending: pending)
     }
 
     /// Severity, then duration (the long-running problem is the one the

@@ -239,6 +239,8 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private func dismiss() {
         UserDefaults.standard.set(true, forKey: Preferences.Key.hasCompletedOnboarding)
         window?.close()
+        // Land the user in the main window, not just the menu bar.
+        NotificationCenter.default.post(name: .whirrOpenMainWindow, object: nil)
     }
 
     // MARK: - NSWindowDelegate

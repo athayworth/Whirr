@@ -1,8 +1,21 @@
 import SwiftUI
 import WhirrCore
 
+/// Re-launching Whirr while it's running (Spotlight, Launchpad, Finder)
+/// opens the main window — the standard Mac answer to "where did the
+/// app go?" for a menu bar app.
+final class WhirrAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NotificationCenter.default.post(name: .whirrOpenMainWindow, object: nil)
+        return false
+    }
+}
+
 @main
 struct WhirrApp: App {
+    static let mainWindowID = "main"
+    @NSApplicationDelegateAdaptor(WhirrAppDelegate.self) private var appDelegate
+
     @State private var monitor = SystemMonitor()
     /// Sparkle bridge — owns the SPUStandardUpdaterController so the
     /// auto-update scheduler starts at launch. Injected into Settings
@@ -21,11 +34,16 @@ struct WhirrApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(monitor: monitor)
+            MenuPopoverView(monitor: monitor)
         } label: {
             MenuBarFanIcon(severity: monitor.worstSeverity)
         }
         .menuBarExtraStyle(.window)
+
+        Window("Whirr", id: Self.mainWindowID) {
+            MainWindow(monitor: monitor)
+        }
+        .defaultSize(width: 900, height: 640)
 
         // Standard macOS Settings panel — opened from the menu's
         // "Settings…" button via `@Environment(\.openSettings)`. Bound
@@ -35,7 +53,8 @@ struct WhirrApp: App {
             SettingsView(
                 updater: updater,
                 rulesLoadResult: monitor.rulesConfigLoadResult,
-                incidentLog: monitor.incidentLog
+                incidentLog: monitor.incidentLog,
+                snoozeStore: monitor.snoozeStore
             )
         }
     }
@@ -49,8 +68,19 @@ struct WhirrApp: App {
 /// effectively free.
 private struct MenuBarFanIcon: View {
     let severity: Severity
+    /// The label is the one view that always exists, so it's where
+    /// non-SwiftUI callers (actions, onboarding) can reach `openWindow`.
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        icon
+            .onReceive(NotificationCenter.default.publisher(for: .whirrOpenMainWindow)) { _ in
+                openWindow(id: WhirrApp.mainWindowID)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+    }
+
+    private var icon: some View {
         Image(systemName: symbolName)
             .foregroundStyle(tint)
             .symbolEffect(

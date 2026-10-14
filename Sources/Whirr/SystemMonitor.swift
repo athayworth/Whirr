@@ -1,6 +1,43 @@
+import AppKit
 import Foundation
 import Observation
 import WhirrCore
+
+/// Main-window sidebar destinations.
+enum SidebarItem: String, Hashable, CaseIterable, Identifiable {
+    case overview, mac, connection, history, developer
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .overview: return "Overview"
+        case .mac: return "Mac"
+        case .connection: return "Connection"
+        case .history: return "History"
+        case .developer: return "Developer"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .overview: return "gauge.with.dots.needle.33percent"
+        case .mac: return "desktopcomputer"
+        case .connection: return "wifi"
+        case .history: return "clock.arrow.circlepath"
+        case .developer: return "hammer"
+        }
+    }
+
+    /// The findings area this section shows, if any.
+    var area: Diagnosis.Area? {
+        switch self {
+        case .mac: return .mac
+        case .connection: return .connection
+        case .developer: return .developer
+        case .overview, .history: return nil
+        }
+    }
+}
 
 @MainActor
 @Observable
@@ -34,6 +71,33 @@ final class SystemMonitor {
     /// Per-project runtime state derived from `~/.harbr/config.json` +
     /// the current process table. Empty when Harbr isn't configured.
     var harbrStatuses: [HarbrProjectStatus] = []
+    /// Health of the root sampler's snapshot file this tick.
+    var daemonStatus: DaemonStatus = .absent
+
+    // MARK: Connection
+
+    /// Latest passive connection state (pings + Wi-Fi link).
+    var connection: ConnectionSnapshot = .empty
+    /// Non-nil while a "Check my connection" test is running.
+    var connectionTestPhase: ConnectionTestRunner.Phase?
+    /// Most recent completed full test (this session or loaded from disk).
+    var latestConnectionTest: ConnectionTestResult?
+    /// Router IP, for the channel-change how-to ("open http://…").
+    var gatewayIP: String?
+    let connectionStore = ConnectionHistoryStore()
+    private let connectionMonitor: ConnectionMonitor
+    private let connectionTestRunner = ConnectionTestRunner()
+
+    // MARK: Navigation
+
+    /// Current main-window section. Lives here so the menu popover and
+    /// action buttons can jump the window to a section.
+    var selectedSection: SidebarItem? = .overview
+    /// Set by actions that want the Connection section to start a test
+    /// as soon as it appears.
+    var pendingConnectionTest = false
+    /// How-to sheet currently shown over the main window.
+    var presentedHowTo: SuggestedAction.HowTo?
 
     /// Currently-expanded process row (nil = nothing expanded). Lives on
     /// the monitor rather than as `@State` in MenuBarView so the
@@ -86,7 +150,10 @@ final class SystemMonitor {
         // (writer) and the Insights view (reader) share one instance
         // and see the same in-memory cache.
         self.pipeline = SamplingPipeline(rulesConfig: config, incidentLog: incidentLog)
+        self.connectionMonitor = ConnectionMonitor(store: connectionStore)
+        self.latestConnectionTest = connectionStore.tests().last
         start()
+        startConnectionMonitoring()
     }
 
     deinit {
@@ -167,10 +234,13 @@ final class SystemMonitor {
                 let recentBundleIds = await MainActor.run {
                     self?.frontmostAppTracker.recordAndSnapshot() ?? []
                 }
+                let connection = await self?.connectionMonitor.snapshot() ?? .empty
                 let result = await pipeline.tick(
                     containers: lastKnownContainers,
-                    recentlyActiveBundleIds: recentBundleIds
+                    recentlyActiveBundleIds: recentBundleIds,
+                    connection: connection
                 )
+                await MainActor.run { self?.connection = connection }
                 await MainActor.run {
                     self?.apply(result)
                     self?.dockerContainers = lastKnownContainers
@@ -196,6 +266,7 @@ final class SystemMonitor {
         })
         self.headroom = result.headroom
         self.harbrStatuses = result.harbrStatuses
+        self.daemonStatus = result.daemonStatus
         // `uniquingKeysWith` over `uniqueKeysWithValues` — duplicate pids
         // shouldn't happen but a trap on the sampling path would take down
         // the whole monitor.
@@ -234,6 +305,72 @@ final class SystemMonitor {
             .filter { !isHidden($0.diagnosis.title) && VerdictSelector.shouldNotify($0) }
             .map(\.diagnosis)
         notifications.process(notifiable)
+    }
+}
+
+// MARK: - Connection
+
+extension SystemMonitor {
+    /// Starts the passive watcher and pauses it across sleep, so a closed
+    /// lid never reads as an outage.
+    fileprivate func startConnectionMonitoring() {
+        let monitor = connectionMonitor
+        Task { await monitor.start() }
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            Task { await monitor.setPaused(true) }
+        }
+        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            Task {
+                // Let Wi-Fi re-associate before judging the connection.
+                try? await Task.sleep(for: .seconds(10))
+                await monitor.setPaused(false)
+            }
+        }
+        Task { [weak self] in
+            let ip = await Task.detached { GatewayResolver.current()?.ip }.value
+            self?.gatewayIP = ip
+        }
+    }
+
+    var isDeveloperRelevant: Bool {
+        !dockerContainers.isEmpty || !harbrStatuses.isEmpty || Preferences.alwaysShowDeveloper
+    }
+
+    /// Visible (not snoozed/muted) contexts for one area, problems first.
+    func contexts(in area: Diagnosis.Area) -> [DiagnosisContext] {
+        diagnosisContexts
+            .filter { $0.diagnosis.area == area && !isHidden($0.diagnosis.title) }
+            .sorted { ($0.diagnosis.tier == .problem ? 0 : 1, -$0.diagnosis.severity.rawValue)
+                    < ($1.diagnosis.tier == .problem ? 0 : 1, -$1.diagnosis.severity.rawValue) }
+    }
+
+    /// Snoozed or muted contexts for one area.
+    func hiddenContexts(in area: Diagnosis.Area) -> [DiagnosisContext] {
+        diagnosisContexts.filter { $0.diagnosis.area == area && isHidden($0.diagnosis.title) }
+    }
+
+    func runConnectionTest() {
+        guard connectionTestPhase == nil else { return }
+        connectionTestPhase = .measuringIdle
+        let runner = connectionTestRunner
+        let store = connectionStore
+        Task { [weak self] in
+            let result = await runner.run { phase in
+                Task { @MainActor in self?.connectionTestPhase = phase == .done ? nil : phase }
+            }
+            store.saveTest(result)
+            await MainActor.run {
+                self?.latestConnectionTest = result
+                self?.connectionTestPhase = nil
+            }
+        }
+    }
+
+    func stopAllDockerContainers() async {
+        for container in dockerContainers {
+            try? await dockerClient.stop(containerId: container.id)
+        }
     }
 }
 
