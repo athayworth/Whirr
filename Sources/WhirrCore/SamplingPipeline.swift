@@ -4,6 +4,14 @@ import Foundation
 /// or read from the daemon's snapshot file, then run through the same
 /// rules engine either way — plus headroom + duration-annotated contexts
 /// + Harbr project attribution, all layered on top by the pipeline itself.
+/// Health of the root sampler daemon's snapshot file, as seen this tick.
+/// `.undecodable` almost always means the installed daemon binary is
+/// older than the app and writes a payload shape the app can't read —
+/// the UI surfaces it so that failure isn't silent.
+public enum DaemonStatus: Sendable, Equatable {
+    case fresh, stale, undecodable, absent
+}
+
 public actor SamplingPipeline {
     public struct Result: Sendable {
         public let snapshot: SystemSnapshot
@@ -20,6 +28,7 @@ public actor SamplingPipeline {
         /// projects yet).
         public let harbrStatuses: [HarbrProjectStatus]
         public let source: Source
+        public let daemonStatus: DaemonStatus
 
         public enum Source: Sendable { case daemon, inProcess }
 
@@ -33,7 +42,8 @@ public actor SamplingPipeline {
             headroom: HeadroomAssessment,
             history: [TrendPoint],
             harbrStatuses: [HarbrProjectStatus],
-            source: Source
+            source: Source,
+            daemonStatus: DaemonStatus = .absent
         ) {
             self.snapshot = snapshot
             self.processes = processes
@@ -42,6 +52,7 @@ public actor SamplingPipeline {
             self.history = history
             self.harbrStatuses = harbrStatuses
             self.source = source
+            self.daemonStatus = daemonStatus
         }
     }
 
@@ -111,12 +122,11 @@ public actor SamplingPipeline {
         containers: [DockerContainer] = [],
         recentlyActiveBundleIds: Set<String> = []
     ) -> Result {
-        if let fromDaemon = readDaemonSnapshot(
+        let (fromDaemon, daemonStatus) = readDaemonSnapshot(
             containers: containers,
             recentlyActiveBundleIds: recentlyActiveBundleIds
-        ) {
-            return fromDaemon
-        }
+        )
+        if let fromDaemon { return fromDaemon }
         let snapshot = systemSampler.sample()
         let processes = processSampler.sample()
         let diagnoses = rules.evaluate(
@@ -132,19 +142,22 @@ public actor SamplingPipeline {
             processes: processes,
             diagnoses: diagnoses,
             history: [],
-            source: .inProcess
+            source: .inProcess,
+            daemonStatus: daemonStatus
         )
     }
 
     private func readDaemonSnapshot(
         containers: [DockerContainer],
         recentlyActiveBundleIds: Set<String>
-    ) -> Result? {
+    ) -> (Result?, DaemonStatus) {
         let url = URL(fileURLWithPath: snapshotPath)
-        guard let data = try? Data(contentsOf: url, options: .uncached) else { return nil }
-        guard let payload = try? decoder.decode(SnapshotPayload.self, from: data) else { return nil }
-        guard payload.formatVersion == SnapshotPayload.currentFormatVersion else { return nil }
-        guard clock().timeIntervalSince(payload.capturedAt) < freshnessWindow else { return nil }
+        guard let data = try? Data(contentsOf: url, options: .uncached) else { return (nil, .absent) }
+        guard let payload = try? decoder.decode(SnapshotPayload.self, from: data),
+              payload.formatVersion == SnapshotPayload.currentFormatVersion else {
+            return (nil, .undecodable)
+        }
+        guard clock().timeIntervalSince(payload.capturedAt) < freshnessWindow else { return (nil, .stale) }
         // Re-run the rules engine on the daemon's snapshot + processes rather
         // than trusting payload.diagnoses. The daemon's rule set is whatever
         // shipped with the installed binary, which may be stale relative to
@@ -157,13 +170,14 @@ public actor SamplingPipeline {
             bundleIdentifier: { ProcessDescriptor.shared.bundleIdentifier(for: $0) },
             recentlyActiveBundleIds: recentlyActiveBundleIds
         )
-        return buildResult(
+        return (buildResult(
             snapshot: payload.snapshot,
             processes: payload.processes,
             diagnoses: diagnoses,
             history: readDaemonHistory(),
-            source: .daemon
-        )
+            source: .daemon,
+            daemonStatus: .fresh
+        ), .fresh)
     }
 
     private func buildResult(
@@ -171,7 +185,8 @@ public actor SamplingPipeline {
         processes: [ProcessSample],
         diagnoses: [Diagnosis],
         history: [TrendPoint],
-        source: Result.Source
+        source: Result.Source,
+        daemonStatus: DaemonStatus
     ) -> Result {
         let now = clock()
         let annotation = durationTracker.annotate(diagnoses, now: now)
@@ -196,7 +211,8 @@ public actor SamplingPipeline {
             headroom: headroom,
             history: history,
             harbrStatuses: harbrStatuses,
-            source: source
+            source: source,
+            daemonStatus: daemonStatus
         )
     }
 

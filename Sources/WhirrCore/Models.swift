@@ -140,6 +140,33 @@ public struct ProcessSample: Identifiable, Hashable, Sendable, Codable {
     public var diskIOBytesPerSec: UInt64 {
         diskReadBytesPerSec &+ diskWriteBytesPerSec
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case pid, name, cpuPercent, memoryBytes, diskReadBytesPerSec, diskWriteBytesPerSec
+        case commandLine, sustainedHighCpuSamples, sustainedIdleSamples, memoryDelta10MinBytes
+        case executablePath, userId, parentPid
+    }
+
+    // Hand-rolled decode so payloads from an older installed daemon —
+    // which predate fields like `sustainedIdleSamples` — still decode.
+    // A required-key miss here fails the whole snapshot and silently
+    // drops the app back to in-process sampling.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.pid = try c.decode(Int32.self, forKey: .pid)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.cpuPercent = try c.decode(Double.self, forKey: .cpuPercent)
+        self.memoryBytes = try c.decode(UInt64.self, forKey: .memoryBytes)
+        self.diskReadBytesPerSec = try c.decodeIfPresent(UInt64.self, forKey: .diskReadBytesPerSec) ?? 0
+        self.diskWriteBytesPerSec = try c.decodeIfPresent(UInt64.self, forKey: .diskWriteBytesPerSec) ?? 0
+        self.commandLine = try c.decodeIfPresent(String.self, forKey: .commandLine)
+        self.sustainedHighCpuSamples = try c.decodeIfPresent(Int.self, forKey: .sustainedHighCpuSamples) ?? 0
+        self.sustainedIdleSamples = try c.decodeIfPresent(Int.self, forKey: .sustainedIdleSamples) ?? 0
+        self.memoryDelta10MinBytes = try c.decodeIfPresent(Int64.self, forKey: .memoryDelta10MinBytes)
+        self.executablePath = try c.decodeIfPresent(String.self, forKey: .executablePath)
+        self.userId = try c.decodeIfPresent(UInt32.self, forKey: .userId)
+        self.parentPid = try c.decodeIfPresent(Int32.self, forKey: .parentPid)
+    }
 }
 
 public struct LoadAverage: Hashable, Sendable, Codable {
