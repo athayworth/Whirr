@@ -12,6 +12,7 @@ struct ConnectionSection: View {
     @State private var outages: [OutageRecord] = []
     @State private var today: DaySummary?
     @State private var changes: [ChannelChange] = []
+    @State private var historyLoaded = false
     @State private var copied = false
 
     var body: some View {
@@ -28,7 +29,9 @@ struct ConnectionSection: View {
             changesSection
             outageSection
         }
-        .task(id: monitor.connection.networkId) {
+        // One reload path, restarted whenever the network or period
+        // changes, so a slow load for the old period can't land last.
+        .task(id: ReloadKey(networkId: monitor.connection.networkId, period: period)) {
             // History grows a minute at a time; refresh on that cadence.
             while !Task.isCancelled {
                 await reloadHistory()
@@ -100,7 +103,6 @@ struct ConnectionSection: View {
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()
-                .onChange(of: period) { Task { await reloadHistory() } }
             }
             if let comparison {
                 ChannelComparisonView(comparison: comparison, current: monitor.connection.link.map(ChannelGroup.init(link:)))
@@ -118,7 +120,9 @@ struct ConnectionSection: View {
                           subtitle: "Every change Whirr saw in the last 30 days. A new channel in the same band is usually the router switching on its own; a band change is usually your Mac or router moving between 2.4 and 5 GHz.",
                           term: .autoChannel)
             VStack(alignment: .leading, spacing: 8) {
-                if changes.isEmpty {
+                if !historyLoaded {
+                    Text("Collecting…").foregroundStyle(.secondary)
+                } else if changes.isEmpty {
                     Text("No changes seen in the last 30 days.").foregroundStyle(.secondary)
                 }
                 ForEach(changes.prefix(10)) { change in
@@ -165,15 +169,19 @@ struct ConnectionSection: View {
         let networkId = monitor.connection.networkId
         let current = monitor.connection.link.map(ChannelGroup.init(link:))
         let period = self.period
-        let (aggs, outs) = await Task.detached {
+        let (aggs, outs) = await Task.detached(priority: .utility) {
             (store.aggregates(since: Date().addingTimeInterval(-ConnectionHistoryStore.retention)), store.outages())
         }.value
+        // A reload for a period or network that's since changed must not
+        // overwrite the newer one.
+        guard !Task.isCancelled else { return }
         outages = outs.filter { networkId == nil || $0.networkId == networkId }
         comparison = networkId.map {
             ChannelComparison.compute(aggs, networkId: $0, current: current, period: period)
         }
         today = networkId.map { DaySummary.compute(aggs, networkId: $0, now: Date()) }
         changes = networkId.map { ChannelChangeLog.changes(aggs, networkId: $0) } ?? []
+        historyLoaded = networkId != nil
         copied = false
     }
 }
@@ -470,4 +478,9 @@ private struct ChannelComparisonView: View {
     private func periodNoun(_ n: Int) -> String {
         comparison.period == .evening ? (n == 1 ? "evening" : "evenings") : (n == 1 ? "day" : "days")
     }
+}
+
+private struct ReloadKey: Equatable {
+    let networkId: String?
+    let period: ChannelComparison.Period
 }
