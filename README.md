@@ -12,13 +12,13 @@ Most performance monitors (Stats, iStat Menus, Activity Monitor) show gauges and
 
 ## Using Whirr
 
-Whirr lives in the menu bar. The icon stays neutral unless a real problem has lasted two minutes; it only notifies for serious problems that last five minutes and have a fix. Click the icon for the headline, or **Open Whirr…** (or launch Whirr again from Spotlight) for the window:
+Whirr lives in the menu bar. The icon stays neutral unless a real problem has lasted two minutes; it only notifies for serious problems that last five minutes and have a fix — one notification per cause.
 
-- **Overview** — the one thing that matters right now, with its fix, plus Mac and Connection at a glance.
-- **Mac** — findings, memory/disk/heat in plain words, and what's using your Mac.
-- **Connection** — Wi-Fi signal, band, channel and width; the two legs of your connection (Mac → router, Mac → internet) so you can tell problems inside your home from problems beyond it; a one-line summary of today; a *Check my connection* test with a plain-English report card (including how crowded your stretch of airwaves is, counting channel width); how each stretch of airwaves has performed over time; a log of every channel change; and a dated outage log you can copy for your provider.
-- **History** — the last 30 minutes, outages, past tests, and which problems recur.
-- **Developer** — Docker containers and dev servers; appears only when Whirr detects them.
+Click the icon for the answer in one sentence ("Your Mac is overloaded, and your link to the router is stalling."), the measured reason behind it, and the one thing to do. Each other cause gets a single line. **Open Whirr → see why** opens the window on that problem:
+
+- **Overview** — the same answer, larger, with **Why?**: *How Whirr knows* (the measurements) and *Why it matters*. Findings with one cause are merged into one story, so Docker's memory, its virtual machine's CPU and the overload it causes read as one problem with one fix.
+- **Mac**, **Connection**, **Developer** — each page starts with its own answer, then its other findings and three key facts. Everything else (processes, all measurements, Wi-Fi details, the connection test, channel history, outages, containers) sits in rows you fold open; Whirr remembers which you left open.
+- **History** — one sentence for the week, then a compact timeline by day: problems Whirr actually raised (repeats folded into one row with total time), outages and channel changes. Patterns and past connection tests fold open at the bottom.
 - **Learn** — plain-English explanations of every term Whirr uses. Hover over or click any ⓘ in the app for the same explanation in place.
 
 Every finding has **Snooze** and **This is normal for me**; muted findings are listed in Settings → Quieted.
