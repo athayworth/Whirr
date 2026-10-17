@@ -73,7 +73,7 @@ final class NotificationSubtitlesTests: XCTestCase {
         let scenarios: [(name: String, snapshot: SystemSnapshot, processes: [ProcessSample])] = [
             (
                 "critical memory + active paging + top hog",
-                snapshot(pressure: .critical, swap: 6, pageInsPerSec: 1500),
+                snapshot(pressure: .critical, swap: 6, swapInsPerSec: 1500),
                 [proc(name: "Arc", mem: 8 * 1_073_741_824)]
             ),
             (
@@ -153,7 +153,7 @@ final class NotificationSubtitlesTests: XCTestCase {
     private func snapshot(
         pressure: MemoryPressure = .normal,
         swap: UInt64 = 0,       // GB
-        pageInsPerSec: Double = 0,
+        swapInsPerSec: Double = 0,
         thermal: ThermalState = .nominal,
         load: LoadAverage = LoadAverage(oneMinute: 1, fiveMinute: 1, fifteenMinute: 1),
         diskFree: UInt64 = 500, // GB
@@ -168,7 +168,7 @@ final class NotificationSubtitlesTests: XCTestCase {
             loadAverage: load,
             rootDiskFreeBytes: diskFree * 1_073_741_824,
             rootDiskTotalBytes: diskTotal * 1_073_741_824,
-            pageInsPerSecond: pageInsPerSec
+            swapInsPerSecond: swapInsPerSec
         )
     }
 

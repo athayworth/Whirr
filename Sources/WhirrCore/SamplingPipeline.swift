@@ -71,6 +71,8 @@ public actor SamplingPipeline {
     private let freshnessWindow: TimeInterval
     /// Injectable for tests so freshness checks are deterministic.
     private let clock: @Sendable () -> Date
+    /// Test hook for system-wide state; nil = the real sampler.
+    private let systemSample: (@Sendable () -> SystemSnapshot)?
 
     private let processSampler = ProcessSampler()
     private let systemSampler = SystemSampler()
@@ -107,8 +109,10 @@ public actor SamplingPipeline {
         clock: @Sendable @escaping () -> Date = { Date() },
         rulesConfig: RulesConfig = .default,
         harbrConfigReader: HarbrConfigReader = HarbrConfigReader(),
-        incidentLog: IncidentLog = IncidentLog()
+        incidentLog: IncidentLog = IncidentLog(),
+        systemSample: (@Sendable () -> SystemSnapshot)? = nil
     ) {
+        self.systemSample = systemSample
         self.snapshotPath = snapshotPath
         self.historyPath = historyPath
         self.freshnessWindow = freshnessWindow
@@ -129,7 +133,7 @@ public actor SamplingPipeline {
             connection: connection
         )
         if let fromDaemon { return fromDaemon }
-        let snapshot = systemSampler.sample()
+        let snapshot = sampleSystem()
         let processes = processSampler.sample()
         let diagnoses = rules.evaluate(
             snapshot: snapshot,
@@ -162,12 +166,16 @@ public actor SamplingPipeline {
             return (nil, .undecodable)
         }
         guard clock().timeIntervalSince(payload.capturedAt) < freshnessWindow else { return (nil, .stale) }
+        // The daemon is only needed for root-owned processes. System-wide
+        // numbers need no privileges, so the app reads them itself — an
+        // old daemon binary can't keep an outdated reading of them alive.
+        let system = sampleSystem()
         // Re-run the rules engine on the daemon's snapshot + processes rather
         // than trusting payload.diagnoses. The daemon's rule set is whatever
         // shipped with the installed binary, which may be stale relative to
         // the app's; this way rule changes ship with the next app build.
         let diagnoses = rules.evaluate(
-            snapshot: payload.snapshot,
+            snapshot: system,
             processes: payload.processes,
             dockerContainers: containers,
             describer: { ProcessDescriptor.shared.friendlyName(for: $0) },
@@ -176,13 +184,17 @@ public actor SamplingPipeline {
             connection: connection
         )
         return (buildResult(
-            snapshot: payload.snapshot,
+            snapshot: system,
             processes: payload.processes,
             diagnoses: diagnoses,
             history: readDaemonHistory(),
             source: .daemon,
             daemonStatus: .fresh
         ), .fresh)
+    }
+
+    private func sampleSystem() -> SystemSnapshot {
+        systemSample?() ?? systemSampler.sample()
     }
 
     private func buildResult(
@@ -206,7 +218,7 @@ public actor SamplingPipeline {
         let headroom = HeadroomAssessor.assess(
             snapshot: snapshot,
             processes: processes,
-            pageInThreshold: rules.config.swapThrashing.thrashingPageInsPerSecond
+            swapInThreshold: rules.config.swapThrashing.thrashingPageInsPerSecond
         )
         let harbrStatuses = evaluateHarbr(processes: processes)
         return Result(

@@ -17,7 +17,7 @@ final class SubsumesValidationTests: XCTestCase {
     private func snapshot(
         pressure: MemoryPressure = .normal,
         swap: UInt64 = 0,
-        pageInsPerSec: Double = 0,
+        swapInsPerSec: Double = 0,
         thermal: ThermalState = .nominal
     ) -> SystemSnapshot {
         SystemSnapshot(
@@ -29,7 +29,7 @@ final class SubsumesValidationTests: XCTestCase {
             loadAverage: .zero,
             rootDiskFreeBytes: 500 * 1_073_741_824,
             rootDiskTotalBytes: 1000 * 1_073_741_824,
-            pageInsPerSecond: pageInsPerSec
+            swapInsPerSecond: swapInsPerSec
         )
     }
 
@@ -65,7 +65,7 @@ final class SubsumesValidationTests: XCTestCase {
     func testMemorySwapSpiralHidesMemorySaturatedAndActivelyPaging() {
         let engine = RulesEngine()
         let raw = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 6 * 1_073_741_824, pageInsPerSec: 1500),
+            snapshot: snapshot(pressure: .critical, swap: 6 * 1_073_741_824, swapInsPerSec: 1500),
             processes: [proc(name: "Arc", mem: 8 * 1_073_741_824)]
         )
         // Sanity: the narrative and both standalones all fired.
@@ -131,7 +131,7 @@ final class SubsumesValidationTests: XCTestCase {
         let engine = RulesEngine()
         let scenarios: [[Diagnosis]] = [
             engine.evaluate(
-                snapshot: snapshot(pressure: .critical, swap: 6 * 1_073_741_824, pageInsPerSec: 1500),
+                snapshot: snapshot(pressure: .critical, swap: 6 * 1_073_741_824, swapInsPerSec: 1500),
                 processes: [proc(name: "Arc", mem: 8 * 1_073_741_824)]
             ),
             engine.evaluate(

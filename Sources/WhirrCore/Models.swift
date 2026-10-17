@@ -229,13 +229,13 @@ public struct SystemSnapshot: Sendable, Codable {
     /// in memory/CPU stats. Defaults to 0 in the empty snapshot.
     public let rootDiskFreeBytes: UInt64
     public let rootDiskTotalBytes: UInt64
-    /// Kernel page-ins per second — a page-in is macOS reading a
-    /// swapped-out page back from disk. This is what "thrashing" actually
+    /// Swap-ins per second — macOS reading swapped-out pages back from
+    /// disk (not ordinary file page-ins). This is what "thrashing" actually
     /// means, distinct from `swapUsedBytes` (which can sit high for hours
     /// after peak with zero active paging). Zero when the sampler hasn't
     /// yet observed two ticks to diff against. Optional-on-decode so old
     /// daemon snapshots that predate the field decode cleanly as 0.
-    public let pageInsPerSecond: Double
+    public let swapInsPerSecond: Double
 
     public init(
         memoryUsedBytes: UInt64,
@@ -246,7 +246,7 @@ public struct SystemSnapshot: Sendable, Codable {
         loadAverage: LoadAverage,
         rootDiskFreeBytes: UInt64 = 0,
         rootDiskTotalBytes: UInt64 = 0,
-        pageInsPerSecond: Double = 0
+        swapInsPerSecond: Double = 0
     ) {
         self.memoryUsedBytes = memoryUsedBytes
         self.memoryAvailableBytes = memoryAvailableBytes
@@ -256,7 +256,7 @@ public struct SystemSnapshot: Sendable, Codable {
         self.loadAverage = loadAverage
         self.rootDiskFreeBytes = rootDiskFreeBytes
         self.rootDiskTotalBytes = rootDiskTotalBytes
-        self.pageInsPerSecond = pageInsPerSecond
+        self.swapInsPerSecond = swapInsPerSecond
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -268,7 +268,7 @@ public struct SystemSnapshot: Sendable, Codable {
         case loadAverage
         case rootDiskFreeBytes
         case rootDiskTotalBytes
-        case pageInsPerSecond
+        case swapInsPerSecond
     }
 
     // Hand-rolled decode so new fields fall back to 0 when reading a
@@ -284,7 +284,7 @@ public struct SystemSnapshot: Sendable, Codable {
         self.loadAverage = try c.decode(LoadAverage.self, forKey: .loadAverage)
         self.rootDiskFreeBytes = try c.decodeIfPresent(UInt64.self, forKey: .rootDiskFreeBytes) ?? 0
         self.rootDiskTotalBytes = try c.decodeIfPresent(UInt64.self, forKey: .rootDiskTotalBytes) ?? 0
-        self.pageInsPerSecond = try c.decodeIfPresent(Double.self, forKey: .pageInsPerSecond) ?? 0
+        self.swapInsPerSecond = try c.decodeIfPresent(Double.self, forKey: .swapInsPerSecond) ?? 0
     }
 
     public static let empty = SystemSnapshot(

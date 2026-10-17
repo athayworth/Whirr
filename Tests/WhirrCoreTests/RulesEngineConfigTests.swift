@@ -67,7 +67,7 @@ final class RulesEngineConfigTests: XCTestCase {
     // MARK: - Threshold tuning
 
     func testSwapWarningGBLoweredFiresEarlier() {
-        // With pageInsPerSec=0 (default) the rule emits the "volume only"
+        // With swapInsPerSec=0 (default) the rule emits the "volume only"
         // title. The important thing this test guards is that lowering
         // the warning threshold does move the fire point.
         let config = RulesConfig(

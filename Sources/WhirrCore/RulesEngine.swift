@@ -248,7 +248,7 @@ struct SwapThrashingRule: Rule {
         // when kernel says memory pressure is fine.
         guard ctx.snapshot.memoryPressure != .normal else { return nil }
 
-        let rate = ctx.snapshot.pageInsPerSecond
+        let rate = ctx.snapshot.swapInsPerSecond
         let isActivelyThrashing = rate >= config.thrashingPageInsPerSecond
 
         if isActivelyThrashing {

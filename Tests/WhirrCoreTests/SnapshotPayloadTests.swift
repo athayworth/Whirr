@@ -56,3 +56,24 @@ final class SnapshotPayloadTests: XCTestCase {
         XCTAssertEqual(SnapshotPayload.currentFormatVersion, 1)
     }
 }
+
+final class MemoryPressureResolutionTests: XCTestCase {
+    func testKernelLevelIsAuthoritativeOverTheHandRolledEstimate() {
+        // Real case: 0.6% of pages free (hand-roll says critical) while
+        // the kernel reports level 2 (warning).
+        XCTAssertEqual(SystemSampler.resolvePressure(kernelLevel: 2, dispatch: nil, handRolled: .critical), .warning)
+        XCTAssertEqual(SystemSampler.resolvePressure(kernelLevel: 1, dispatch: .warning, handRolled: .critical), .normal)
+        XCTAssertEqual(SystemSampler.resolvePressure(kernelLevel: 4, dispatch: nil, handRolled: .normal), .critical)
+    }
+
+    func testFallsBackToDispatchThenHandRolled() {
+        XCTAssertEqual(SystemSampler.resolvePressure(kernelLevel: nil, dispatch: .warning, handRolled: .critical), .warning)
+        XCTAssertEqual(SystemSampler.resolvePressure(kernelLevel: nil, dispatch: nil, handRolled: .warning), .warning)
+        XCTAssertEqual(SystemSampler.resolvePressure(kernelLevel: 7, dispatch: nil, handRolled: .normal), .normal,
+                       "an unrecognised level is ignored, not guessed")
+    }
+
+    func testLiveKernelLevelIsReadable() {
+        XCTAssertNotNil(SystemSampler.kernelPressureLevel(), "kern.memorystatus_vm_pressure_level should be readable unprivileged")
+    }
+}

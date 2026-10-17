@@ -15,7 +15,7 @@ final class RulesEngineTests: XCTestCase {
         load: LoadAverage = LoadAverage(oneMinute: 1, fiveMinute: 1, fifteenMinute: 1),
         diskFree: UInt64 = 500 * .gb,
         diskTotal: UInt64 = 1000 * .gb,
-        pageInsPerSec: Double = 0
+        swapInsPerSec: Double = 0
     ) -> SystemSnapshot {
         SystemSnapshot(
             memoryUsedBytes: used,
@@ -26,7 +26,7 @@ final class RulesEngineTests: XCTestCase {
             loadAverage: load,
             rootDiskFreeBytes: diskFree,
             rootDiskTotalBytes: diskTotal,
-            pageInsPerSecond: pageInsPerSec
+            swapInsPerSecond: swapInsPerSec
         )
     }
 
@@ -159,7 +159,7 @@ final class RulesEngineTests: XCTestCase {
         // "actively paging" language. This is the case the user was
         // seeing perpetually before the split.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .warning, swap: 3 * .gb, pageInsPerSec: 0),
+            snapshot: snapshot(pressure: .warning, swap: 3 * .gb, swapInsPerSec: 0),
             processes: []
         )
         let swap = result.first { $0.title == "Swap is holding old pages" }
@@ -171,7 +171,7 @@ final class RulesEngineTests: XCTestCase {
         // 8 GB in swap + memory critical + real page-in traffic → the
         // full "actively paging" story, escalated to critical.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 8 * .gb, pageInsPerSec: 2000),
+            snapshot: snapshot(pressure: .critical, swap: 8 * .gb, swapInsPerSec: 2000),
             processes: []
         )
         let swap = result.first { $0.title == "System is actively paging" }
@@ -181,7 +181,7 @@ final class RulesEngineTests: XCTestCase {
     func testActivePagingIsWarningBelowCriticalGB() {
         // Real thrashing but only 3 GB used — still warning, not critical.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .warning, swap: 3 * .gb, pageInsPerSec: 2000),
+            snapshot: snapshot(pressure: .warning, swap: 3 * .gb, swapInsPerSec: 2000),
             processes: []
         )
         let swap = result.first { $0.title == "System is actively paging" }
@@ -469,7 +469,7 @@ final class RulesEngineTests: XCTestCase {
         // high page-in rate so the underlying swap rule emits the
         // active-paging title the spiral narrative depends on.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, pageInsPerSec: 1500),
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, swapInsPerSec: 1500),
             processes: [process(name: "Arc", mem: 8 * .gb)]
         )
         let narrative = result.first { $0.title == "Memory + swap death spiral" }
@@ -483,7 +483,7 @@ final class RulesEngineTests: XCTestCase {
         // pressure critical but no active paging should NOT be called
         // a "death spiral." No page-in traffic = no user-felt cost.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, pageInsPerSec: 0),
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, swapInsPerSec: 0),
             processes: [process(name: "Arc", mem: 8 * .gb)]
         )
         XCTAssertFalse(titles(result).contains("Memory + swap death spiral"))
@@ -493,7 +493,7 @@ final class RulesEngineTests: XCTestCase {
         // When both narratives qualify, the more specific Backup story wins —
         // they shouldn't both fire and double up the message.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, pageInsPerSec: 1500),
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, swapInsPerSec: 1500),
             processes: [process(name: "bztransmit", cpu: 8)]
         )
         let narratives = result.filter { $0.kind == .narrative }
@@ -562,7 +562,7 @@ final class RulesEngineTests: XCTestCase {
         // When both could fire, the more dire memory+swap story wins.
         // Add page-in traffic so the spiral qualifies under the new gate.
         let result = engine.evaluate(
-            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, pageInsPerSec: 1500),
+            snapshot: snapshot(pressure: .critical, swap: 6 * .gb, swapInsPerSec: 1500),
             processes: [process(name: "ffmpeg", readBps: 300 * .mb, writeBps: 0)]
         )
         let narratives = result.filter { $0.kind == .narrative }

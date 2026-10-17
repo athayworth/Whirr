@@ -11,7 +11,7 @@ final class HeadroomAssessorTests: XCTestCase {
         used: UInt64 = 8 * 1_073_741_824,
         available: UInt64 = 8 * 1_073_741_824,
         pressure: MemoryPressure = .normal,
-        pageInsPerSec: Double = 0
+        swapInsPerSec: Double = 0
     ) -> SystemSnapshot {
         SystemSnapshot(
             memoryUsedBytes: used,
@@ -22,7 +22,7 @@ final class HeadroomAssessorTests: XCTestCase {
             loadAverage: .zero,
             rootDiskFreeBytes: 500 * 1_073_741_824,
             rootDiskTotalBytes: 1000 * 1_073_741_824,
-            pageInsPerSecond: pageInsPerSec
+            swapInsPerSecond: swapInsPerSec
         )
     }
 
@@ -67,14 +67,25 @@ final class HeadroomAssessorTests: XCTestCase {
         XCTAssertEqual(a.verdict, .pressed)
     }
 
-    func testPressedOnHighPageInRate() {
-        // Even if the kernel hasn't yet flipped to critical, active
-        // paging means the machine is really felt — we call it pressed.
+    func testPressedOnHighSwapInRateUnderPressure() {
+        // Reading swapped pages back while the kernel reports pressure is
+        // real thrashing — pressed even before the kernel says critical.
         let a = HeadroomAssessor.assess(
-            snapshot: snapshot(available: 5 * 1_073_741_824, pageInsPerSec: 2000),
+            snapshot: snapshot(available: 5 * 1_073_741_824, pressure: .warning, swapInsPerSec: 2000),
             processes: []
         )
         XCTAssertEqual(a.verdict, .pressed)
+        XCTAssertTrue(a.headline.contains("paging"))
+    }
+
+    func testSwapInsWithoutKernelPressureAreNotPressed() {
+        // Brief swap-ins with plenty available and the kernel calm (e.g.
+        // waking a long-idle app) aren't a memory problem.
+        let a = HeadroomAssessor.assess(
+            snapshot: snapshot(available: 5 * 1_073_741_824, pressure: .normal, swapInsPerSec: 2000),
+            processes: []
+        )
+        XCTAssertNotEqual(a.verdict, .pressed)
     }
 
     func testTopHogNamed() {

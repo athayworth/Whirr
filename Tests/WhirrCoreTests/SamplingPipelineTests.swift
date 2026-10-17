@@ -22,13 +22,22 @@ final class SamplingPipelineTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makePipeline(now: Date = Date(timeIntervalSince1970: 1_800_000_000)) -> SamplingPipeline {
+    private func makePipeline(now: Date = Date(timeIntervalSince1970: 1_800_000_000),
+                              system: (@Sendable () -> SystemSnapshot)? = nil) -> SamplingPipeline {
         SamplingPipeline(
             snapshotPath: snapshotPath,
             historyPath: historyPath,
             freshnessWindow: 10,
-            clock: { now }
+            clock: { now },
+            systemSample: system
         )
+    }
+
+    private static func local(pressure: MemoryPressure) -> SystemSnapshot {
+        SystemSnapshot(memoryUsedBytes: 16 * 1_073_741_824, memoryAvailableBytes: 1 * 1_073_741_824,
+                       memoryPressure: pressure, swapUsedBytes: 8 * 1_073_741_824, thermalState: .nominal,
+                       loadAverage: .zero, rootDiskFreeBytes: 100 * 1_073_741_824,
+                       rootDiskTotalBytes: 1000 * 1_073_741_824)
     }
 
     private func writeSnapshot(
@@ -79,10 +88,13 @@ final class SamplingPipelineTests: XCTestCase {
     func testFreshDaemonFileIsUsed() async throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         try writeSnapshot(capturedAt: now.addingTimeInterval(-2))  // 2s old
-        let pipeline = makePipeline(now: now)
+        let pipeline = makePipeline(now: now, system: { Self.local(pressure: .warning) })
         let result = await pipeline.tick()
         XCTAssertEqual(result.source, .daemon)
+        // Processes come from the daemon; system-wide numbers from the app.
+        XCTAssertEqual(result.snapshot.memoryPressure, .warning)
         XCTAssertEqual(result.snapshot.memoryUsedBytes, 16 * 1_073_741_824)
+        XCTAssertEqual(result.snapshot.thermalState, .nominal)  // daemon file said .serious
     }
 
     func testStaleDaemonFileFallsBackToInProcess() async throws {
@@ -130,7 +142,7 @@ final class SamplingPipelineTests: XCTestCase {
         // binary may be older than the app) and produce diagnoses.
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         try writeSnapshot(capturedAt: now, memoryPressure: .critical)
-        let pipeline = makePipeline(now: now)
+        let pipeline = makePipeline(now: now, system: { Self.local(pressure: .critical) })
         let result = await pipeline.tick()
         XCTAssertEqual(result.source, .daemon)
         XCTAssertFalse(
@@ -170,5 +182,21 @@ extension SamplingPipelineTests {
         let result = await makePipeline(now: now).tick()
         XCTAssertEqual(result.daemonStatus, .fresh)
         XCTAssertEqual(result.source, .daemon)
+    }
+}
+
+// MARK: - System-wide state is read by the app itself
+
+extension SamplingPipelineTests {
+    func testSystemWideStateComesFromTheAppNotTheDaemon() async throws {
+        // The daemon binary can be older than the app (it was, for five
+        // months). System-wide numbers need no privileges, so the app's
+        // own reading wins and fixes ship with the app.
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        try writeSnapshot(capturedAt: now, memoryPressure: .critical)
+        let result = await makePipeline(now: now, system: { Self.local(pressure: .normal) }).tick()
+        XCTAssertEqual(result.source, .daemon)
+        XCTAssertEqual(result.snapshot.memoryPressure, .normal)
+        XCTAssertFalse(result.diagnoses.contains { $0.title == "Memory is saturated" })
     }
 }

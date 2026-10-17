@@ -27,7 +27,7 @@ public enum HeadroomAssessor {
         // SwapThrashingRule's "actively paging" decision, so tuning one
         // flows through to both. Prior code hardcoded a separate 1000
         // here which could disagree with the swap rule's 500 default.
-        pageInThreshold: Double = SwapThrashingRuleConfig().thrashingPageInsPerSecond
+        swapInThreshold: Double = SwapThrashingRuleConfig().thrashingPageInsPerSecond
     ) -> HeadroomAssessment {
         let total = snapshot.memoryUsedBytes &+ snapshot.memoryAvailableBytes
         let available = snapshot.memoryAvailableBytes
@@ -40,8 +40,8 @@ public enum HeadroomAssessor {
             .sorted { $0.memoryBytes > $1.memoryBytes }
             .first { $0.memoryBytes >= 500 * 1_048_576 }
 
-        let verdict = classify(snapshot: snapshot, available: available, pageInThreshold: pageInThreshold)
-        let headline = headline(for: verdict, availableBytes: available, snapshot: snapshot, pageInThreshold: pageInThreshold)
+        let verdict = classify(snapshot: snapshot, available: available, swapInThreshold: swapInThreshold)
+        let headline = headline(for: verdict, availableBytes: available, snapshot: snapshot, swapInThreshold: swapInThreshold)
         let context = context(for: verdict, topHog: topHog, snapshot: snapshot)
 
         return HeadroomAssessment(
@@ -58,7 +58,7 @@ public enum HeadroomAssessor {
     private static func classify(
         snapshot: SystemSnapshot,
         available: UInt64,
-        pageInThreshold: Double
+        swapInThreshold: Double
     ) -> HeadroomAssessment.Verdict {
         // Kernel pressure trumps everything. If the kernel says pressed,
         // we say pressed regardless of the byte count — the OS is already
@@ -67,7 +67,9 @@ public enum HeadroomAssessor {
         // Real page-in activity means the machine is actively reading
         // swapped-out pages back — this is thrashing, and it hurts even
         // if the "available" bucket looks fine at the sample instant.
-        if snapshot.pageInsPerSecond >= pageInThreshold { return .pressed }
+        // Only with the kernel reporting pressure: brief swap-ins on a calm
+        // machine (waking a long-idle app) aren't a memory problem.
+        if snapshot.memoryPressure != .normal && snapshot.swapInsPerSecond >= swapInThreshold { return .pressed }
 
         if available < pressedAvailableFloorBytes { return .pressed }
         if snapshot.memoryPressure == .warning { return .tight }
@@ -79,7 +81,7 @@ public enum HeadroomAssessor {
         for verdict: HeadroomAssessment.Verdict,
         availableBytes: UInt64,
         snapshot: SystemSnapshot,
-        pageInThreshold: Double
+        swapInThreshold: Double
     ) -> String {
         let gb = Double(availableBytes) / 1_073_741_824
         let gbFormatted = String(format: "%.1f GB", gb)
@@ -89,7 +91,7 @@ public enum HeadroomAssessor {
         case .tight:
             return "Working fine — \(gbFormatted) of headroom. Watch what you add."
         case .pressed:
-            if snapshot.pageInsPerSecond >= pageInThreshold {
+            if snapshot.memoryPressure != .normal && snapshot.swapInsPerSecond >= swapInThreshold {
                 return "Under pressure — macOS is actively paging."
             }
             return "Under pressure. Close something to recover."

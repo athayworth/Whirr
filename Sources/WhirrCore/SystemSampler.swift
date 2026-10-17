@@ -1,9 +1,11 @@
 import Foundation
 import Darwin
 
-/// Samples system-wide state (memory, swap, pressure, disk, load, page-in
+/// Samples system-wide state (memory, swap, pressure, disk, load, swap-in
 /// rate). Instance state exists solely to compute per-second rates: the
-/// kernel exposes cumulative counters (`vm.pageins`), and rate = (delta /
+/// kernel exposes cumulative counters (`vm_statistics64.swapins` — pages
+/// read back from swap, unlike `pageins`, which also counts ordinary file
+/// reads such as launching an app), and rate = (delta /
 /// elapsed) between samples. First call after construction returns 0 for
 /// rate-shaped fields — call again after an interval for usable data.
 ///
@@ -25,13 +27,13 @@ public final class SystemSampler: @unchecked Sendable {
     /// captured at the same moment. Both needed to compute rate; keeping
     /// them together prevents a "captured wall-clock now / stale kernel
     /// counter" mismatch across a slow tick.
-    private var priorPageIns: UInt64 = 0
+    private var priorSwapIns: UInt64 = 0
     private var priorSampleAt: TimeInterval = 0
 
     public init() {}
 
     /// Static convenience for callers who don't need page-in rate (tests,
-    /// legacy call sites). Returns a snapshot with `pageInsPerSecond = 0`
+    /// legacy call sites). Returns a snapshot with `swapInsPerSecond = 0`
     /// which is the semantically-correct "we don't know yet" value.
     public static func sample() -> SystemSnapshot {
         // Use a throw-away instance so we go through the same code path.
@@ -54,7 +56,7 @@ public final class SystemSampler: @unchecked Sendable {
         let availableBytes = freeBytes + inactiveBytes + speculativeBytes
 
         let (rootFree, rootTotal) = Self.rootDiskUsage()
-        let pageInsPerSec = updatePageInsRate(current: vm.pageins)
+        let swapInsPerSec = updateSwapInsRate(current: vm.pageins)
 
         return SystemSnapshot(
             memoryUsedBytes: usedBytes,
@@ -65,15 +67,15 @@ public final class SystemSampler: @unchecked Sendable {
             loadAverage: Self.currentLoadAverage(),
             rootDiskFreeBytes: rootFree,
             rootDiskTotalBytes: rootTotal,
-            pageInsPerSecond: pageInsPerSec
+            swapInsPerSecond: swapInsPerSec
         )
     }
 
-    private func updatePageInsRate(current: UInt64) -> Double {
+    private func updateSwapInsRate(current: UInt64) -> Double {
         let now = ProcessInfo.processInfo.systemUptime
         return lock.withLock {
             defer {
-                priorPageIns = current
+                priorSwapIns = current
                 priorSampleAt = now
             }
             guard priorSampleAt > 0 else { return 0 }
@@ -82,8 +84,8 @@ public final class SystemSampler: @unchecked Sendable {
             // Kernel counter can wrap or reset on rare occasion (e.g.
             // extended sleep); treat a decrease as "no signal" rather than
             // reporting a huge negative rate cast to an unsigned wraparound.
-            guard current >= priorPageIns else { return 0 }
-            let delta = current - priorPageIns
+            guard current >= priorSwapIns else { return 0 }
+            let delta = current - priorSwapIns
             return Double(delta) / elapsed
         }
     }
@@ -124,18 +126,31 @@ public final class SystemSampler: @unchecked Sendable {
         return LoadAverage(oneMinute: loads[0], fiveMinute: loads[1], fifteenMinute: loads[2])
     }
 
-    /// Two-source pressure classification: the kernel's dispatch-source
-    /// verdict (authoritative when present) max'd with our hand-rolled
-    /// ratio heuristic. Taking the *max* means whichever side sees
-    /// pressure first wins — we never under-report what Activity Monitor
-    /// would show.
+    /// Memory pressure as macOS itself judges it. The kernel's level
+    /// (the same one Activity Monitor's pressure graph uses) is read every
+    /// sample; the dispatch-source event is a fallback, and the hand-rolled
+    /// ratio is used only if neither is available. macOS deliberately
+    /// keeps very little memory free, so the ratio alone over-reports.
     static func classifyPressure(vm: vm_statistics64_data_t) -> MemoryPressure {
-        let handRoll = handRolledPressure(vm: vm)
-        guard let kernel = pressureMonitor.current else {
-            // Bootstrap window — no kernel event yet. Trust the hand-roll.
-            return handRoll
+        resolvePressure(kernelLevel: kernelPressureLevel(), dispatch: pressureMonitor.current,
+                        handRolled: handRolledPressure(vm: vm))
+    }
+
+    static func resolvePressure(kernelLevel: Int32?, dispatch: MemoryPressure?, handRolled: MemoryPressure) -> MemoryPressure {
+        switch kernelLevel {
+        case 1: return .normal
+        case 2: return .warning
+        case 4: return .critical
+        default: return dispatch ?? handRolled
         }
-        return max(handRoll, kernel)
+    }
+
+    /// `kern.memorystatus_vm_pressure_level`: 1 normal, 2 warning, 4 critical.
+    static func kernelPressureLevel() -> Int32? {
+        var level: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) == 0 else { return nil }
+        return level
     }
 
     /// Hand-rolled pressure. Thresholds sit deliberately *behind* what the
