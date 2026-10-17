@@ -14,10 +14,10 @@ struct HistorySectionView: View {
                 HistorySection(history: monitor.trendHistory)
             }
 
-            SectionHeader(title: "Connection outages", subtitle: "Last 30 days")
+            SectionHeader(title: "Connection outages", subtitle: "Last 30 days, on the network you're on now")
             OutageList(outages: outages)
 
-            SectionHeader(title: "Connection tests")
+            SectionHeader(title: "Connection tests", subtitle: "On the network you're on now")
             if tests.isEmpty {
                 Text("No tests yet. Run one from Connection → Check my connection.").foregroundStyle(.secondary)
             } else {
@@ -34,9 +34,12 @@ struct HistorySectionView: View {
             InsightsView(log: monitor.incidentLog)
                 .padding(.top, 6)
         }
-        .task {
-            outages = monitor.connectionStore.outages()
-            tests = monitor.connectionStore.tests()
+        .task(id: monitor.connection.networkId) {
+            // Same rule as Connection: another network's outages say
+            // nothing about this one, so they aren't mixed in.
+            let network = monitor.connection.networkId
+            outages = monitor.connectionStore.outages().filter { network == nil || $0.networkId == network }
+            tests = monitor.connectionStore.tests().filter { network == nil || $0.networkId == network }
         }
     }
 }
