@@ -28,6 +28,7 @@ struct MainWindow: View {
             case .connection: ConnectionSection(monitor: monitor)
             case .history: HistorySectionView(monitor: monitor)
             case .developer: DeveloperSection(monitor: monitor)
+            case .learn: LearnSection()
             }
         }
         .frame(minWidth: 760, minHeight: 520)

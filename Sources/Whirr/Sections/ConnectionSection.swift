@@ -10,21 +10,31 @@ struct ConnectionSection: View {
     @State private var period: ChannelComparison.Period = .evening
     @State private var comparison: ChannelComparison?
     @State private var outages: [OutageRecord] = []
+    @State private var today: DaySummary?
+    @State private var changes: [ChannelChange] = []
     @State private var copied = false
 
     var body: some View {
         SectionPage(title: "Connection") {
             LinkCard(connection: monitor.connection, testRunning: monitor.connectionTestPhase != nil)
             HopRows(connection: monitor.connection)
+            if let today { TodayCard(summary: today) }
 
             SectionHeader(title: "Findings")
-            FindingsList(monitor: monitor, area: .connection, emptyText: "Your connection looks healthy.")
+            FindingsList(monitor: monitor, area: .connection, emptyText: "No connection problems right now.")
 
             testSection
             channelSection
+            changesSection
             outageSection
         }
-        .task(id: monitor.connection.networkId) { await reloadHistory() }
+        .task(id: monitor.connection.networkId) {
+            // History grows a minute at a time; refresh on that cadence.
+            while !Task.isCancelled {
+                await reloadHistory()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
         .onAppear {
             if monitor.pendingConnectionTest {
                 monitor.pendingConnectionTest = false
@@ -81,7 +91,8 @@ struct ConnectionSection: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 SectionHeader(title: "How each Wi-Fi channel has done",
-                              subtitle: "Your router may change channel when it restarts. Whirr compares them at the same times of day.")
+                              subtitle: "Stalls between your Mac and the router, compared at the same times of day.",
+                              term: .channelWidth)
                 Spacer()
                 Picker("", selection: $period) {
                     Text("Evenings").tag(ChannelComparison.Period.evening)
@@ -99,12 +110,43 @@ struct ConnectionSection: View {
         }
     }
 
+    // MARK: Channel changes
+
+    private var changesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(title: "Channel changes",
+                          subtitle: "Every change Whirr saw in the last 30 days. Usually the router switching channel on its own.",
+                          term: .autoChannel)
+            VStack(alignment: .leading, spacing: 8) {
+                if changes.isEmpty {
+                    Text("No changes seen in the last 30 days.").foregroundStyle(.secondary)
+                }
+                ForEach(changes.prefix(10)) { change in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(Self.when(change)).font(.caption).foregroundStyle(.secondary)
+                        Text(change.description)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
+        }
+    }
+
+    static func when(_ change: ChannelChange) -> String {
+        let at = change.at.formatted(date: .abbreviated, time: .shortened)
+        guard let notBefore = change.notBefore else { return at }
+        return "Sometime between \(notBefore.formatted(date: .abbreviated, time: .shortened)) and \(at) (Whirr wasn't watching)"
+    }
+
     // MARK: Outages
 
     private var outageSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                SectionHeader(title: "Outages", subtitle: "Times the internet dropped in the last 30 days, and which side failed.")
+                SectionHeader(title: "Outages", subtitle: "Times the internet dropped in the last 30 days, and which side failed when Whirr could tell.",
+                              term: .outage)
                 Spacer()
                 if !outages.isEmpty {
                     Button(copied ? "Copied" : "Copy summary for your provider") {
@@ -130,6 +172,8 @@ struct ConnectionSection: View {
         comparison = networkId.map {
             ChannelComparison.compute(aggs, networkId: $0, current: current, period: period)
         }
+        today = networkId.map { DaySummary.compute(aggs, networkId: $0, now: Date()) }
+        changes = networkId.map { ChannelChangeLog.changes(aggs, networkId: $0) } ?? []
         copied = false
     }
 }
@@ -146,28 +190,61 @@ private struct LinkCard: View {
                 .font(.system(size: 30))
                 .foregroundStyle(.tint)
                 .frame(width: 40)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.title3.weight(.semibold))
-                Text(subtitle).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 5) {
+                    Text(title).font(.title3.weight(.semibold))
+                    if connection.link != nil && !connection.paused { InfoButton(term: .signalStrength) }
+                }
+                if connection.isWired {
+                    Text("Wi-Fi measurements don't apply.").foregroundStyle(.secondary)
+                } else if let link = connection.link {
+                    facts(link)
+                }
                 if !connection.gatewayPingable {
-                    Text("Your router doesn't answer Whirr's checks, so Whirr can only judge the internet as a whole — not Wi-Fi separately.")
+                    Text("Your router doesn't answer Whirr's checks, so Whirr can only judge the connection as a whole — not inside your home separately.")
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
         .padding(16)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
     }
 
+    private func facts(_ link: WiFiLink) -> some View {
+        let block = WiFiSpectrum.occupied(band: link.band, channel: link.channel, widthMHz: link.widthMHz)
+        let channel = block.channels.count > 1
+            ? "\(link.channel) (uses \(block.channels.lowerBound)–\(block.channels.upperBound))"
+            : "\(link.channel)"
+        return Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 8) {
+            GridRow {
+                fact("Band", link.band, .band)
+                fact("Channel", channel, .channel)
+                fact("Width", link.widthMHz > 0 ? "\(link.widthMHz) MHz" : "Unknown", .channelWidth)
+            }
+            GridRow {
+                fact("Signal", "\(link.rssi) dBm", .signalStrength)
+                fact("Above noise", "\(link.snr) dB", .snr)
+                fact("Link rate", "\(Int(link.txRateMbps)) Mbps", .linkRate)
+            }
+        }
+    }
+
+    private func fact(_ label: String, _ value: String, _ term: Glossary.Term) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+                InfoButton(term: term).font(.caption)
+            }
+            Text(value).font(.body.monospacedDigit())
+        }
+    }
+
     private var symbol: String {
         if connection.isWired { return "cable.connector" }
         guard let link = connection.link else { return "wifi.slash" }
-        switch ConnectionText.signalWord(link) {
-        case "Strong": return "wifi"
-        case "OK": return "wifi"
-        default: return "wifi.exclamationmark"
-        }
+        return link.quality == .weak ? "wifi.exclamationmark" : "wifi"
     }
 
     private var title: String {
@@ -178,58 +255,100 @@ private struct LinkCard: View {
         guard let link = connection.link else { return "Not connected to Wi-Fi" }
         return "Wi-Fi signal: \(ConnectionText.signalWord(link))"
     }
-
-    private var subtitle: String {
-        if connection.isWired { return "Wi-Fi measurements don't apply." }
-        guard let link = connection.link else { return "" }
-        return "\(link.band), channel \(link.channel) · signal \(link.rssi) dBm, \(link.snr) dB above background noise · \(Int(link.txRateMbps)) Mbps link"
-    }
 }
 
 private struct HopRows: View {
     let connection: ConnectionSnapshot
 
     var body: some View {
+        let router = HopHealth(connection.gateway10m)
         VStack(spacing: 0) {
             if connection.gatewayPingable {
-                row(icon: "wifi.router", name: "Your Mac → your router", stats: connection.gateway10m,
-                    healthy: "Steady — your Wi-Fi is fine.", unhealthy: "Stalling — this is your Wi-Fi.")
+                row(icon: "wifi.router", name: "Your Mac → your router", term: .routerHop,
+                    stats: connection.gateway10m,
+                    stallingText: "Stalling between your Mac and the router.")
                 Divider()
             }
-            row(icon: "globe", name: "Your Mac → the internet", stats: connection.internet10m,
-                healthy: "Steady.", unhealthy: connection.gatewayPingable && isClean(connection.gateway10m)
-                    ? "Stalling beyond your router — your provider's side." : "Stalling.")
+            row(icon: "globe", name: "Your Mac → the internet", term: .internetHop,
+                stats: connection.internet10m,
+                stallingText: connection.gatewayPingable && router == .steady
+                    ? "Stalling beyond your router." : "Stalling.")
         }
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
     }
 
-    private func isClean(_ h: HopStats) -> Bool { h.spikes < 3 && h.lossPercent < 1 }
+    private func status(_ health: HopHealth, stallingText: String) -> (String, Color) {
+        switch health {
+        case .measuring: return ("Measuring…", .secondary)
+        case .steady: return ("Steady.", .secondary)
+        case .minor: return ("A few stalls.", .secondary)
+        case .stalling: return (stallingText, .orange)
+        }
+    }
 
-    private func row(icon: String, name: String, stats: HopStats, healthy: String, unhealthy: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+    private func row(icon: String, name: String, term: Glossary.Term, stats: HopStats, stallingText: String) -> some View {
+        let (text, color) = status(HopHealth(stats), stallingText: stallingText)
+        return HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon).frame(width: 22).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 3) {
-                Text(name).font(.headline)
-                Text(stats.count < 30 ? "Measuring…" : (isClean(stats) ? healthy : unhealthy))
-                    .foregroundStyle(stats.count < 30 || isClean(stats) ? Color.secondary : Color.orange)
+                LabelWithInfo(text: name, term: term, font: .headline)
+                Text(text).foregroundStyle(color)
             }
             Spacer()
             Grid(alignment: .trailing, horizontalSpacing: 18, verticalSpacing: 2) {
                 GridRow {
-                    Text("Typical delay").font(.caption).foregroundStyle(.secondary)
-                    Text("Stalls (10 min)").font(.caption).foregroundStyle(.secondary)
-                    Text("Lost").font(.caption).foregroundStyle(.secondary)
+                    header("Typical delay", .delay)
+                    header("Stalls (10 min)", .stall)
+                    header("Lost", .lost)
                 }
                 GridRow {
                     Text(stats.medianMs.map(ConnectionText.ms) ?? "—")
-                    Text("\(stats.spikes)")
-                    Text(String(format: "%.0f%%", stats.lossPercent))
+                    Text(stats.count == 0 ? "—" : "\(stats.spikes)")
+                    Text(stats.count == 0 ? "—" : String(format: "%.0f%%", stats.lossPercent))
                 }
                 .font(.body.monospacedDigit())
             }
         }
         .padding(14)
-        .accessibilityElement(children: .combine)
+    }
+
+    private func header(_ text: String, _ term: Glossary.Term) -> some View {
+        HStack(spacing: 3) {
+            Text(text).font(.caption).foregroundStyle(.secondary)
+            InfoButton(term: term).font(.caption)
+        }
+    }
+}
+
+private struct TodayCard: View {
+    let summary: DaySummary
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol).frame(width: 22).foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Today").font(.headline)
+                Text(summary.sentence).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
+    }
+
+    private var symbol: String {
+        switch summary.verdict {
+        case .notEnoughData: return "hourglass"
+        case .steady: return "checkmark.circle"
+        case .beyondRouter, .insideHome, .cantSeparate: return "exclamationmark.circle"
+        }
+    }
+
+    private var color: Color {
+        switch summary.verdict {
+        case .notEnoughData, .steady: return .secondary
+        case .beyondRouter, .insideHome, .cantSeparate: return .orange
+        }
     }
 }
 
@@ -240,7 +359,11 @@ private struct ReportRowView: View {
         HStack(alignment: .top, spacing: 12) {
             GradeChip(grade: row.grade)
             VStack(alignment: .leading, spacing: 4) {
-                Text(row.title).font(.headline)
+                if let term = Self.term(row.id) {
+                    LabelWithInfo(text: row.title, term: term, font: .headline)
+                } else {
+                    Text(row.title).font(.headline)
+                }
                 Text(row.explanation).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let fix = row.fix {
                     Label(fix, systemImage: "arrow.turn.down.right")
@@ -253,6 +376,18 @@ private struct ReportRowView: View {
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.background.secondary))
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension ReportRowView {
+    static func term(_ id: String) -> Glossary.Term? {
+        switch id {
+        case "speed": return .speed
+        case "stability": return .stall
+        case "underLoad": return .underLoad
+        case "crowding": return .crowding
+        default: return nil
+        }
     }
 }
 

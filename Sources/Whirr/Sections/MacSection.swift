@@ -18,7 +18,8 @@ struct MacSection: View {
             SectionHeader(title: "At a glance")
             facts
 
-            SectionHeader(title: "What's using your Mac", subtitle: "Click a row for details and options.")
+            SectionHeader(title: "What's using your Mac", subtitle: "Click a row for details and options. CPU is shown on the right.",
+                          term: .cpu)
             VStack(alignment: .leading, spacing: 2) {
                 if rows.isEmpty {
                     Text("Checking…").foregroundStyle(.secondary)
@@ -42,25 +43,36 @@ struct MacSection: View {
         let s = monitor.systemSnapshot
         return Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
             GridRow {
-                fact("Memory in use", MenuFormat.bytes(s.memoryUsedBytes))
-                fact("Memory available", MenuFormat.bytes(s.memoryAvailableBytes))
+                fact("Memory pressure", pressureWord(s.memoryPressure), .memoryPressure)
+                fact("Memory in use", MenuFormat.bytes(s.memoryUsedBytes), nil)
             }
             GridRow {
-                fact("Parked on disk (swap)", MenuFormat.bytes(s.swapUsedBytes))
+                fact("Parked on disk (swap)", MenuFormat.bytes(s.swapUsedBytes), .swap)
                 fact("Free disk space", s.rootDiskTotalBytes > 0
-                     ? "\(MenuFormat.bytes(s.rootDiskFreeBytes)) (\(Int(100 - s.rootDiskPercentUsed))%)" : "—")
+                     ? "\(MenuFormat.bytes(s.rootDiskFreeBytes)) (\(Int(100 - s.rootDiskPercentUsed))%)" : "—", .diskSpace)
             }
             GridRow {
-                fact("Heat", heatWord(s.thermalState))
-                fact("Workload", workloadWord(s.loadAverage.oneMinute))
+                fact("Heat", heatWord(s.thermalState), .heat)
+                fact("Workload", workloadWord(s.loadAverage.oneMinute), .workload)
             }
         }
     }
 
-    private func fact(_ label: String, _ value: String) -> some View {
+    private func fact(_ label: String, _ value: String, _ term: Glossary.Term?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                Text(label).font(.caption).foregroundStyle(.secondary)
+                if let term { InfoButton(term: term).font(.caption) }
+            }
             Text(value).font(.body.monospacedDigit())
+        }
+    }
+
+    private func pressureWord(_ p: MemoryPressure) -> String {
+        switch p {
+        case .normal: return "Normal"
+        case .warning: return "Elevated"
+        case .critical: return "High"
         }
     }
 

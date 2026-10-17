@@ -5,7 +5,7 @@ import WhirrCore
 
 /// Main-window sidebar destinations.
 enum SidebarItem: String, Hashable, CaseIterable, Identifiable {
-    case overview, mac, connection, history, developer
+    case overview, mac, connection, history, developer, learn
     var id: String { rawValue }
 
     var title: String {
@@ -15,6 +15,7 @@ enum SidebarItem: String, Hashable, CaseIterable, Identifiable {
         case .connection: return "Connection"
         case .history: return "History"
         case .developer: return "Developer"
+        case .learn: return "Learn"
         }
     }
 
@@ -25,6 +26,7 @@ enum SidebarItem: String, Hashable, CaseIterable, Identifiable {
         case .connection: return "wifi"
         case .history: return "clock.arrow.circlepath"
         case .developer: return "hammer"
+        case .learn: return "book"
         }
     }
 
@@ -34,7 +36,7 @@ enum SidebarItem: String, Hashable, CaseIterable, Identifiable {
         case .mac: return .mac
         case .connection: return .connection
         case .developer: return .developer
-        case .overview, .history: return nil
+        case .overview, .history, .learn: return nil
         }
     }
 }

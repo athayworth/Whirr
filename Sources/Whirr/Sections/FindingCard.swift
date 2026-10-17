@@ -156,10 +156,14 @@ struct FindingsList: View {
 struct SectionHeader: View {
     let title: String
     var subtitle: String?
+    var term: Glossary.Term?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.title3.weight(.semibold))
+            HStack(spacing: 5) {
+                Text(title).font(.title3.weight(.semibold))
+                if let term { InfoButton(term: term) }
+            }
             if let subtitle {
                 Text(subtitle).font(.callout).foregroundStyle(.secondary)
             }
