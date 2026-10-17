@@ -18,6 +18,18 @@ final class ConnectionHistoryStoreTests: XCTestCase {
                         gateway: .empty, internet: .empty, channel: 36, band: "5 GHz", rssi: -60, noise: -90)
     }
 
+    func testAppendAfterATornLineStartsOnAFreshLine() throws {
+        let store = ConnectionHistoryStore(directory: dir)
+        store.append(agg(0))
+        let url = dir.appendingPathComponent("connection-history.jsonl")
+        let h = try FileHandle(forWritingTo: url)
+        h.seekToEndOfFile()
+        h.write(Data("{\"torn".utf8))   // a crash mid-write
+        try h.close()
+        store.append(agg(60))
+        XCTAssertEqual(store.aggregates(since: .distantPast).map(\.minute), [t0, t0.addingTimeInterval(60)])
+    }
+
     func testAppendAndReadAggregatesAcrossInstances() {
         ConnectionHistoryStore(directory: dir).append(agg(0))
         ConnectionHistoryStore(directory: dir).append(agg(60))

@@ -68,13 +68,22 @@ public final class ConnectionHistoryStore: @unchecked Sendable {
         line.append(0x0A)
         lock.withLock {
             ensureDirectory()
-            if let handle = try? FileHandle(forWritingTo: historyURL) {
-                handle.seekToEndOfFile()
-                handle.write(line)
-                try? handle.close()
-            } else {
+            guard let handle = try? FileHandle(forUpdating: historyURL) else {
                 try? line.write(to: historyURL, options: .atomic)
+                return
             }
+            defer { try? handle.close() }
+            // A crash mid-write can leave a torn last line; start on a
+            // fresh line so this minute isn't glued onto the fragment.
+            // Write errors (a full disk) are dropped, not fatal.
+            do {
+                let end = try handle.seekToEnd()
+                if end > 0 {
+                    try handle.seek(toOffset: end - 1)
+                    if try handle.read(upToCount: 1) != Data([0x0A]) { line.insert(0x0A, at: 0) }
+                }
+                try handle.write(contentsOf: line)
+            } catch {}
         }
     }
 

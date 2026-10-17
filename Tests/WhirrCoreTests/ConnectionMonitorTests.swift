@@ -164,6 +164,18 @@ final class ConnectionMonitorTests: XCTestCase {
         XCTAssertEqual(first?.rssi, -60)
     }
 
+    func testHistoryIsPurgedDailyWhileRunningNotOnlyAtLaunch() async {
+        let p = FakePinger(); p.set("192.168.1.1", 3); p.set("1.1.1.1", 30); p.set("8.8.8.8", 30)
+        let store = ConnectionHistoryStore(directory: dir)
+        let m = ConnectionMonitor(pinger: p, wifi: FakeWiFi(), store: store, gateway: { [gw] in gw })
+        await m.pingRound(at: t0)
+        let old = t0.addingTimeInterval(-29.5 * 86_400)   // inside retention today, outside tomorrow
+        store.append(MinuteAggregate(minute: old, networkId: "aa:bb", gateway: .empty, internet: .empty,
+                                     channel: 36, band: "5 GHz", rssi: -60, noise: -90))
+        await m.pingRound(at: t0.addingTimeInterval(86_400))
+        XCTAssertFalse(store.aggregates(since: .distantPast).contains { $0.minute == old })
+    }
+
     // MARK: Review fixes
 
     func testWifiDropOnWifiMacIsWifiDisconnectedNotWired() {

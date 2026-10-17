@@ -84,6 +84,9 @@ public actor ConnectionMonitor {
     private var primaryHostFailures = 0
     private var currentMinute: Date?
     private var lastRoundAt: Date?
+    /// Day of the last retention purge — history is trimmed daily while
+    /// running, not only at launch.
+    private var lastPurgeDay: Date?
 
     public init(
         pinger: Pinging = ICMPPinger(),
@@ -144,6 +147,7 @@ public actor ConnectionMonitor {
     /// One 2-second iteration. Exposed for tests, which drive time.
     public func pingRound(at now: Date) async {
         guard !paused else { return }
+        purgeIfNewDay(now)
         refreshGateway()
         // The link as of the previous round belongs to the minute that
         // round closed — recorded with that minute, not with this one.
@@ -197,6 +201,13 @@ public actor ConnectionMonitor {
 
         writeMinuteAggregateIfDue(now: now, networkId: id, link: linkDuringLastRound)
         lastRoundAt = now
+    }
+
+    private func purgeIfNewDay(_ now: Date) {
+        let day = Calendar.current.startOfDay(for: now)
+        guard day != lastPurgeDay else { return }
+        if lastPurgeDay != nil { store.purge(olderThan: now.addingTimeInterval(-ConnectionHistoryStore.retention)) }
+        lastPurgeDay = day
     }
 
     /// Re-resolved every round (one SCDynamicStore read + one ARP sysctl)
