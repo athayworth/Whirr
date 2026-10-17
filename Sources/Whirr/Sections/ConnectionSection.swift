@@ -17,17 +17,35 @@ struct ConnectionSection: View {
 
     var body: some View {
         SectionPage(title: "Connection") {
-            LinkCard(connection: monitor.net.connection, testRunning: monitor.net.testPhase != nil)
-            HopRows(connection: monitor.net.connection)
-            if let today { TodayCard(summary: today) }
+            AnswerCard(monitor: monitor, area: .connection)
+            FindingsList(monitor: monitor, area: .connection)
+            KeyFacts(facts: keyFacts)
 
-            SectionHeader(title: "Findings")
-            FindingsList(monitor: monitor, area: .connection, emptyText: "No connection problems right now.")
-
-            testSection
-            channelSection
-            changesSection
-            outageSection
+            VStack(alignment: .leading, spacing: 4) {
+                FoldRow("Wi-Fi details", term: .channel, key: "connection.wifi") {
+                    LinkCard(connection: monitor.net.connection, testRunning: monitor.net.testPhase != nil)
+                }
+                Divider()
+                FoldRow("Today", summary: today.map { Self.todayWord($0) }, key: "connection.today") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let today { TodayCard(summary: today) }
+                        HopRows(connection: monitor.net.connection)
+                    }
+                }
+                Divider()
+                FoldRow("Check my connection", summary: monitor.net.latestTest.map {
+                    "last run \($0.at.formatted(.relative(presentation: .named)))" }, key: "connection.test") {
+                    testSection
+                }
+                Divider()
+                FoldRow("How each channel has done", term: .channelWidth, key: "connection.channels") { channelSection }
+                Divider()
+                FoldRow("Channel changes", summary: historyLoaded ? "\(changes.count) in 30 days" : nil,
+                        term: .autoChannel, key: "connection.changes") { changesSection }
+                Divider()
+                FoldRow("Outages", summary: historyLoaded ? "\(outages.count) in 30 days" : nil,
+                        term: .outage, key: "connection.outages") { outageSection }
+            }
         }
         // One reload path, restarted whenever the network or period
         // changes, so a slow load for the old period can't land last.
@@ -51,13 +69,45 @@ struct ConnectionSection: View {
         }
     }
 
+    private var keyFacts: [(label: String, value: String, term: Glossary.Term?)] {
+        let c = monitor.net.connection
+        let signal: String
+        if c.isWired { signal = "Wired" }
+        else if let link = c.link { signal = "\(ConnectionText.signalWord(link)) · \(link.snr) dB" }
+        else { signal = "Not connected" }
+        return [
+            ("Wi-Fi signal", signal, .signalStrength),
+            ("Your Mac → router", c.gatewayPingable ? Self.healthWord(HopHealth(c.gateway10m)) : "Not checked", .routerHop),
+            ("Your Mac → internet", Self.healthWord(HopHealth(c.internet10m)), .internetHop),
+        ]
+    }
+
+    static func healthWord(_ h: HopHealth) -> String {
+        switch h {
+        case .measuring: return "Measuring…"
+        case .steady: return "Steady"
+        case .minor: return "A few stalls"
+        case .stalling: return "Stalling"
+        }
+    }
+
+    static func todayWord(_ d: DaySummary) -> String {
+        switch d.verdict {
+        case .notEnoughData: return "not enough data yet"
+        case .steady: return "steady"
+        case .beyondRouter: return "stalls beyond your router"
+        case .insideHome: return "stalls inside your home"
+        case .cantSeparate: return "stalls"
+        }
+    }
+
     // MARK: Full test
 
     private var testSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                SectionHeader(title: "Check my connection",
-                              subtitle: "Measures speed, delay when busy, and how crowded your Wi-Fi channel is.")
+                Text("Measures speed, delay when busy, and how crowded your Wi-Fi channel is.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 if let phase = monitor.net.testPhase {
                     ProgressView().controlSize(.small)
@@ -93,9 +143,8 @@ struct ConnectionSection: View {
     private var channelSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                SectionHeader(title: "How each Wi-Fi channel has done",
-                              subtitle: "Stalls between your Mac and the router, compared at the same times of day.",
-                              term: .channelWidth)
+                Text("Stalls between your Mac and the router, compared at the same times of day.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Picker("", selection: $period) {
                     Text("Evenings").tag(ChannelComparison.Period.evening)
@@ -116,9 +165,8 @@ struct ConnectionSection: View {
 
     private var changesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Channel changes",
-                          subtitle: "Every change Whirr saw in the last 30 days. A new channel in the same band is usually the router switching on its own; a band change is usually your Mac or router moving between 2.4 and 5 GHz.",
-                          term: .autoChannel)
+            Text("A new channel in the same band is usually the router switching on its own; a band change is usually your Mac or router moving between 2.4 and 5 GHz.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 8) {
                 if !historyLoaded {
                     Text("Collecting…").foregroundStyle(.secondary)
@@ -149,8 +197,8 @@ struct ConnectionSection: View {
     private var outageSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                SectionHeader(title: "Outages", subtitle: "Times the internet dropped in the last 30 days, and which side failed when Whirr could tell.",
-                              term: .outage)
+                Text("Which side failed, when Whirr could tell.")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 if !outages.isEmpty {
                     Button(copied ? "Copied" : "Copy summary for your provider") {

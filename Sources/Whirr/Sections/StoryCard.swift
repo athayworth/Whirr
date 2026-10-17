@@ -91,20 +91,29 @@ struct StoryActionButton: View {
 struct StoryCard: View {
     @Bindable var monitor: SystemMonitor
     let story: Story
+    /// Inside the 2-minute gate: shown calm, like the answer card says.
+    var isPending = false
     @State private var showWhy = false
+
+    private var tint: Color { isPending ? .secondary : story.headline.displayTint }
 
     var body: some View {
         let d = story.headline.diagnosis
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: story.headline.symbol)
+            Image(systemName: isPending ? "eye" : story.headline.symbol)
                 .font(.title3)
-                .foregroundStyle(story.headline.displayTint)
+                .foregroundStyle(tint)
                 .frame(width: 24)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(d.title).font(.headline)
-                    if !story.isProblem {
+                    if isPending {
+                        Text("Just started")
+                            .font(.caption2.weight(.medium))
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(.quaternary, in: Capsule())
+                    } else if !story.isProblem {
                         Text("Note")
                             .font(.caption2.weight(.medium))
                             .padding(.horizontal, 6).padding(.vertical, 1)
@@ -134,7 +143,7 @@ struct StoryCard: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(story.headline.displayTint.opacity(story.isProblem ? 0.09 : 0.06))
+                .fill(tint.opacity(story.isProblem && !isPending ? 0.09 : 0.06))
         )
         .onAppear {
             if monitor.nav.focusedStoryID == story.id { showWhy = true; monitor.nav.focusedStoryID = nil }

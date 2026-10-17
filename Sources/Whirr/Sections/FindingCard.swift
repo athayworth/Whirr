@@ -51,7 +51,7 @@ struct FindingCard: View {
                             .background(.quaternary, in: Capsule())
                     }
                     Spacer()
-                    Text(MenuFormat.duration(seconds: context.durationSeconds))
+                    Text(DurationText.words(seconds: context.durationSeconds))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .help("How long this has been going on")
@@ -116,36 +116,31 @@ struct FindingCard: View {
     }
 }
 
-/// A list of findings for one area with a collapsible "quieted" group.
+/// An area's other stories (the top one is in its answer card), then a
+/// collapsible "quieted" group.
 struct FindingsList: View {
     @Bindable var monitor: SystemMonitor
     let area: Diagnosis.Area
-    var emptyText: String = "Nothing to report."
 
     @State private var showHidden = false
 
     var body: some View {
-        let visible = monitor.contexts(in: area)
+        let top = monitor.verdict.stories.first { $0.area == area }
+        let rest = monitor.verdict.stories(in: area).filter { $0.id != top?.id }
         let hidden = monitor.hiddenContexts(in: area)
-        VStack(alignment: .leading, spacing: 10) {
-            if !monitor.hasSampledYet {
-                ProgressView("Checking…").controlSize(.small)
-            } else if visible.isEmpty {
-                Label(emptyText, systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.secondary)
-                    .symbolRenderingMode(.multicolor)
-            }
-            ForEach(visible) { FindingCard(monitor: monitor, context: $0) }
-            if !hidden.isEmpty {
-                DisclosureGroup(isExpanded: $showHidden) {
-                    VStack(spacing: 8) {
-                        ForEach(hidden) { FindingCard(monitor: monitor, context: $0, isHidden: true) }
+        if !rest.isEmpty || !hidden.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                let pendingIDs = Set(monitor.verdict.pendingStories.map(\.id))
+                ForEach(rest) { StoryCard(monitor: monitor, story: $0, isPending: pendingIDs.contains($0.id)) }
+                if !hidden.isEmpty {
+                    DisclosureGroup(isExpanded: $showHidden) {
+                        VStack(spacing: 8) {
+                            ForEach(hidden) { FindingCard(monitor: monitor, context: $0, isHidden: true) }
+                        }
+                        .padding(.top, 6)
+                    } label: {
+                        Text("\(hidden.count) quieted").font(.callout).foregroundStyle(.secondary)
                     }
-                    .padding(.top, 6)
-                } label: {
-                    Text("\(hidden.count) quieted")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
                 }
             }
         }

@@ -7,33 +7,51 @@ struct MacSection: View {
 
     var body: some View {
         SectionPage(title: "Mac") {
-            HeadroomSection(
-                hasSampledYet: monitor.hasSampledYet,
-                headroom: monitor.headroom,
-                topHogFriendlyName: topHogFriendlyName
-            )
-            SectionHeader(title: "Findings")
-            FindingsList(monitor: monitor, area: .mac, emptyText: "No problems with your Mac right now.")
+            AnswerCard(monitor: monitor, area: .mac)
+            FindingsList(monitor: monitor, area: .mac)
+            KeyFacts(facts: [
+                ("Memory pressure", pressureWord(monitor.systemSnapshot.memoryPressure), .memoryPressure),
+                ("Workload", workloadWord(monitor.systemSnapshot.loadAverage.oneMinute), .workload),
+                ("Free disk", monitor.systemSnapshot.rootDiskTotalBytes > 0
+                    ? MenuFormat.bytes(monitor.systemSnapshot.rootDiskFreeBytes) : "—", .diskSpace),
+            ])
 
-            SectionHeader(title: "At a glance")
-            facts
-
-            SectionHeader(title: "What's using your Mac", subtitle: "Click a row for details and options. CPU is shown on the right.",
-                          term: .cpu)
-            VStack(alignment: .leading, spacing: 2) {
-                if rows.isEmpty {
-                    Text("Checking…").foregroundStyle(.secondary)
-                }
-                ForEach(rows) { proc in
-                    ProcessRow(proc: proc, expandedPid: $monitor.expandedPid,
-                               parentLookup: parentLookup, compactMode: compactMode,
-                               secondsPerSample: monitor.secondsPerSample) {
-                        UnifiedTrailing(proc: proc)
+            VStack(alignment: .leading, spacing: 4) {
+                FoldRow("What's using your Mac", summary: topUserSummary, term: .cpu, key: "mac.processes") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Click a row for details and options. CPU is on the right.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        if rows.isEmpty { Text("Checking…").foregroundStyle(.secondary) }
+                        ForEach(rows) { proc in
+                            ProcessRow(proc: proc, expandedPid: $monitor.expandedPid,
+                                       parentLookup: parentLookup, compactMode: compactMode,
+                                       secondsPerSample: monitor.secondsPerSample) {
+                                UnifiedTrailing(proc: proc)
+                            }
+                        }
                     }
                 }
+                Divider()
+                FoldRow("All measurements", key: "mac.measurements") { facts }
+                Divider()
+                FoldRow("Background helper", summary: helperSummary, key: "mac.helper") {
+                    daemonStatus
+                }
             }
+        }
+    }
 
-            daemonStatus
+    private var topUserSummary: String? {
+        guard let top = monitor.topProcesses.first else { return nil }
+        return "\(ProcessDescriptor.shared.friendlyName(for: top)) \(MenuFormat.cpu(top.cpuPercent))"
+    }
+
+    private var helperSummary: String {
+        switch monitor.daemonStatus {
+        case .fresh: return "running"
+        case .stale: return "not responding"
+        case .undecodable: return "out of date"
+        case .absent: return "not installed"
         }
     }
 
@@ -45,6 +63,10 @@ struct MacSection: View {
             GridRow {
                 fact("Memory pressure", pressureWord(s.memoryPressure), .memoryPressure)
                 fact("Memory in use", MenuFormat.bytes(s.memoryUsedBytes), nil)
+            }
+            GridRow {
+                fact("Memory available", MenuFormat.bytes(s.memoryAvailableBytes), nil)
+                fact("Headroom", monitor.hasSampledYet ? monitor.headroom.headline : "—", nil)
             }
             GridRow {
                 fact("Parked on disk (swap)", MenuFormat.bytes(s.swapUsedBytes), .swap)
