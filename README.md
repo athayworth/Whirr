@@ -6,9 +6,9 @@
 
 A macOS app that tells you **why** your Mac or your connection feels slow — not just how slow.
 
-Most performance monitors (Stats, iStat Menus, Activity Monitor) show gauges and let you draw your own conclusions. Whirr runs a rules engine over CPU, memory, swap, thermal, per-process activity and your network connection, and surfaces one plain-English answer with one thing to do: *"Backup is hammering your system — pause it"*, *"Wi-Fi is spiky — change your router's channel"*, *"Problem is past your router — here's what to tell your provider"*.
+Most performance monitors (Stats, iStat Menus, Activity Monitor) show gauges and let you draw your own conclusions. Whirr runs a rules engine over CPU, memory, swap, thermal, per-process activity and your network connection, and surfaces one plain-English answer with one thing to do: *"Backup is competing with your apps — pause it"*, *"Wi-Fi is spiky — run a connection test to see why"*, *"Problem is past your router — here's what to check"*. Whirr only names a cause when its measurements isolate it; otherwise it says what it saw and what it can't tell.
 
-> Local, privacy-respecting, MIT-licensed, no telemetry. Network use: tiny pings to your router and 1.1.1.1 every 2 s (~10 MB/day), update checks, and the optional user-started connection test (~500 MB).
+> Local, privacy-respecting, MIT-licensed, no telemetry. Network use: tiny pings to your router, 1.1.1.1 and 8.8.8.8 every 2 s (about 10 MB/day leaves your home), update checks, and the optional user-started connection test (~500 MB).
 
 ## Using Whirr
 
@@ -16,9 +16,10 @@ Whirr lives in the menu bar. The icon stays neutral unless a real problem has la
 
 - **Overview** — the one thing that matters right now, with its fix, plus Mac and Connection at a glance.
 - **Mac** — findings, memory/disk/heat in plain words, and what's using your Mac.
-- **Connection** — Wi-Fi signal, the two legs of your connection (Mac → router, Mac → internet) so you can tell Wi-Fi problems from provider problems, a *Check my connection* test with a plain-English report card, how each Wi-Fi channel has performed over time, and a dated outage log you can copy for your provider.
+- **Connection** — Wi-Fi signal, band, channel and width; the two legs of your connection (Mac → router, Mac → internet) so you can tell problems inside your home from problems beyond it; a one-line summary of today; a *Check my connection* test with a plain-English report card (including how crowded your stretch of airwaves is, counting channel width); how each stretch of airwaves has performed over time; a log of every channel change; and a dated outage log you can copy for your provider.
 - **History** — the last 30 minutes, outages, past tests, and which problems recur.
 - **Developer** — Docker containers and dev servers; appears only when Whirr detects them.
+- **Learn** — plain-English explanations of every term Whirr uses. Hover over or click any ⓘ in the app for the same explanation in place.
 
 Every finding has **Snooze** and **This is normal for me**; muted findings are listed in Settings → Quieted.
 
