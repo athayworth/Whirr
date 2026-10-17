@@ -149,4 +149,18 @@ final class DiagnosisDurationTrackerTests: XCTestCase {
         let out = tracker.annotate([Diagnosis(title: "M", detail: "", severity: .warning)], now: t0.addingTimeInterval(6))
         XCTAssertEqual(out.contexts.first?.peakSeverity, .critical)
     }
+
+    func testBecomingAProblemRestartsTheClock() {
+        // Docker sat as a background note for an hour; the moment it
+        // becomes a Mac problem, "how long has this been a problem" is 0 —
+        // otherwise it would skip the 2-minute and 5-minute gates.
+        var tracker = DiagnosisDurationTracker()
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        let note = diagnosis("Docker", .critical).classified(tier: .note, area: .developer, action: nil)
+        _ = tracker.annotate([note], now: t0)
+        _ = tracker.annotate([note], now: t0.addingTimeInterval(3600))
+        let problem = diagnosis("Docker", .critical).classified(tier: .problem, area: .mac, action: nil)
+        let ctx = tracker.annotate([problem], now: t0.addingTimeInterval(3603)).contexts.first
+        XCTAssertEqual(ctx?.durationSeconds, 0)
+    }
 }

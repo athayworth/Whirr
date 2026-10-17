@@ -41,6 +41,9 @@ public struct DiagnosisDurationTracker {
         /// emitting a closed incident so the log records "how bad did
         /// this get" rather than "how bad was it at the very end."
         var peakSeverity: Severity
+        /// Problem vs note. A change of tier is a new incident: a note's
+        /// time in the background doesn't count toward a problem's gates.
+        var tier: Diagnosis.Tier
         var culprits: [String]
         /// Last-observed severity that's at least `trendLookbackSeconds`
         /// stale. Filled the first time we see a sample that's old
@@ -122,13 +125,14 @@ public struct DiagnosisDurationTracker {
     }
 
     private func update(state: State?, with diagnosis: Diagnosis, now: Date) -> State {
-        guard var existing = state else {
+        guard var existing = state, existing.tier == diagnosis.tier else {
             // First appearance (or first after full clear reset).
             return State(
                 firstSeenAt: now,
                 lastSeenAt: now,
                 lastSeverity: diagnosis.severity,
                 peakSeverity: diagnosis.severity,
+                tier: diagnosis.tier,
                 culprits: diagnosis.culprits,
                 referenceSeverity: nil,
                 referenceCapturedAt: nil
