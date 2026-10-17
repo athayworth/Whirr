@@ -48,7 +48,11 @@ struct OverviewSection: View {
         case .critical: pressure = "memory pressure high"
         }
         let top = monitor.verdict.stories.first { $0.area == .mac }
-        return (top.map { $0.phrase.sentenceCased } ?? "No problems right now") + " · " + pressure
+        let watching = monitor.verdict.pendingStories.first { $0.area == .mac }
+        let lead = top.map { $0.phrase.sentenceCased }
+            ?? watching.map { "Keeping an eye on something — \($0.phrase)" }
+            ?? "No problems right now"
+        return lead + " · " + pressure
     }
 }
 

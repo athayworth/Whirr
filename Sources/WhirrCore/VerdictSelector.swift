@@ -83,7 +83,10 @@ public enum VerdictSelector {
     /// Notifications are reserved for problems that are critical, have
     /// lasted at least five minutes, and come with something to do.
     public static func shouldNotify(_ story: Story) -> Bool {
-        story.isProblem && shouldNotify(story.headline)
+        story.isProblem
+            && story.headline.diagnosis.severity == .critical
+            && story.durationSeconds >= notifyGateSeconds
+            && story.action != nil
     }
 
     public static func shouldNotify(_ c: DiagnosisContext) -> Bool {

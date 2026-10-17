@@ -66,10 +66,10 @@ struct HistorySectionView: View {
         let now = Date()
         // Problems still going on aren't in the log yet; include them as
         // ongoing so today isn't missing what's happening now.
-        let ongoing = monitor.verdict.stories.map { story -> DiagnosisIncident in
-            let d = story.headline.diagnosis
-            return DiagnosisIncident(title: d.title, peakSeverity: story.headline.peakSeverity,
-                                     firstSeenAt: story.headline.firstSeenAt, lastSeenAt: now,
+        let ongoing = monitor.verdict.stories.flatMap(\.members).map { m -> DiagnosisIncident in
+            let d = m.diagnosis
+            return DiagnosisIncident(title: d.title, peakSeverity: m.peakSeverity,
+                                     firstSeenAt: m.firstSeenAt, lastSeenAt: now,
                                      culprits: d.culprits, tier: d.tier, area: d.area)
         }
         let (incidents, outages, aggs, saved) = await Task.detached(priority: .utility) {
@@ -80,8 +80,13 @@ struct HistorySectionView: View {
         }.value
         guard !Task.isCancelled else { return }
         let changes = network.map { ChannelChangeLog.changes(aggs, networkId: $0) } ?? []
+        // Minutes Whirr was actually watching this week (one record per
+        // minute while running), so an empty week isn't called "quiet"
+        // when Whirr barely saw it.
+        let weekStart = Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: now))!
+        let watched = aggs.filter { $0.minute >= weekStart && (network == nil || $0.networkId == network) }.count
         digest = HistoryDigest.compute(incidents: incidents + ongoing, outages: outages, changes: changes,
-                                       networkId: network, now: now)
+                                       networkId: network, now: now, watchedMinutes: watched)
         tests = saved.filter { network == nil || $0.networkId == network }
     }
 }

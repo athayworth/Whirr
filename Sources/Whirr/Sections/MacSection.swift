@@ -9,10 +9,12 @@ struct MacSection: View {
         SectionPage(title: "Mac") {
             AnswerCard(monitor: monitor, area: .mac)
             FindingsList(monitor: monitor, area: .mac)
+            // "—" until the first reading: the defaults aren't measurements.
+            let sampled = monitor.hasSampledYet
             KeyFacts(facts: [
-                ("Memory pressure", pressureWord(monitor.systemSnapshot.memoryPressure), .memoryPressure),
-                ("Workload", workloadWord(monitor.systemSnapshot.loadAverage.oneMinute), .workload),
-                ("Free disk", monitor.systemSnapshot.rootDiskTotalBytes > 0
+                ("Memory pressure", sampled ? pressureWord(monitor.systemSnapshot.memoryPressure) : "—", .memoryPressure),
+                ("Workload", sampled ? workloadWord(monitor.systemSnapshot.loadAverage.oneMinute) : "—", .workload),
+                ("Free disk", sampled && monitor.systemSnapshot.rootDiskTotalBytes > 0
                     ? MenuFormat.bytes(monitor.systemSnapshot.rootDiskFreeBytes) : "—", .diskSpace),
             ])
 

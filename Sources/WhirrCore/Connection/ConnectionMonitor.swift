@@ -31,6 +31,10 @@ public struct ConnectionSnapshot: Sendable, Equatable {
         self.paused = paused
     }
 
+    /// True once the passive checks have results and aren't paused —
+    /// before that, "no connection problems" would be a guess.
+    public var isMeasured: Bool { !paused && (internet1m.count > 0 || currentOutage != nil) }
+
     public static let empty = ConnectionSnapshot(
         link: nil, isWired: false, gatewayPingable: true, networkId: nil,
         gateway1m: .empty, internet1m: .empty, gateway10m: .empty, internet10m: .empty,

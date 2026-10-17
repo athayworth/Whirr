@@ -11,7 +11,9 @@ public struct Story: Sendable, Hashable, Identifiable {
 
     public var id: String { headline.diagnosis.title }
     public var area: Diagnosis.Area { headline.diagnosis.area }
-    public var action: SuggestedAction? { headline.diagnosis.action }
+    /// The headline's fix, or the first member's that has one — a story
+    /// headed by "overloaded" still offers "Stop Docker containers".
+    public var action: SuggestedAction? { members.lazy.compactMap(\.diagnosis.action).first }
     /// The short "because" — the headline's first measured fact.
     public var because: String? { headline.diagnosis.evidence.first }
     public var impact: String? { headline.diagnosis.impact }
@@ -19,6 +21,14 @@ public struct Story: Sendable, Hashable, Identifiable {
     public var durationSeconds: Int { headline.durationSeconds }
     public var isProblem: Bool { headline.diagnosis.tier == .problem }
     public var titles: [String] { members.map(\.diagnosis.title) }
+    /// What "This is normal for me" silences: the owner's own findings,
+    /// never system-wide ones that merely joined (those could next be
+    /// caused by something else).
+    public var muteTitles: [String] {
+        guard owner != nil else { return titles }
+        let joined = StoryBuilder.cpuEffects.union(StoryBuilder.memoryEffects)
+        return titles.filter { !joined.contains($0) }
+    }
 
     /// How Whirr knows: the headline's evidence, then each other member's
     /// first fact, labelled with its title.
@@ -85,10 +95,15 @@ public enum StoryBuilder {
         return stories.sorted { VerdictSelector.isMoreImportant($0.headline, $1.headline) }
     }
 
-    /// Problems before notes, then the verdict's own importance order.
+    /// Problems before notes, then members already past the 2-minute gate
+    /// (so a brand-new member can't push an established story back to
+    /// "pending"), then the verdict's own importance order.
     static func headlineFirst(_ a: DiagnosisContext, _ b: DiagnosisContext) -> Bool {
         let ap = a.diagnosis.tier == .problem, bp = b.diagnosis.tier == .problem
         if ap != bp { return ap }
+        let ag = a.durationSeconds >= VerdictSelector.iconGateSeconds
+        let bg = b.durationSeconds >= VerdictSelector.iconGateSeconds
+        if ag != bg { return ag }
         return VerdictSelector.isMoreImportant(a, b)
     }
 

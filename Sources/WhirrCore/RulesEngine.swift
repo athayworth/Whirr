@@ -304,7 +304,7 @@ struct SwapThrashingRule: Rule {
                 evidence: ["Reading about \(Int(rate)) pages per second back from swap",
                            String(format: "Swap in use: %.1f GB", gb),
                            Evidence.pressure(ctx.snapshot.memoryPressure)],
-                impact: "Reading memory back from disk is far slower than from RAM — that's the sluggishness."
+                impact: "Reading memory back from disk is far slower than from RAM, which can make everything feel sluggish."
             )
         }
 
@@ -365,7 +365,7 @@ struct OverloadedSystemRule: Rule {
             severity: ratio >= config.criticalRatio ? .critical : .warning
         ).explained(
             evidence: [String(format: "Workload: %.1f on %d cores (%.1f× capacity)", load, ctx.coreCount, ratio)],
-            impact: "With every core busy, apps and games wait their turn — that's the stutter."
+            impact: "With every core busy, apps and games have to wait their turn, which can cause stutter."
         )
     }
 }
@@ -843,7 +843,7 @@ struct DockerStrainNarrative: NarrativeRule {
                            : String(format: "Share of this Mac: %.0f%% of memory", memoryShare * 100)]
                 + (ctx.dockerContainers.max(by: { $0.memoryBytes < $1.memoryBytes }).map {
                     ["Heaviest container: \($0.name) at \(formatBytes($0.memoryBytes))"] } ?? []),
-            impact: "Docker's virtual machine holds its memory and CPU even while containers sit idle."
+            impact: "Docker's virtual machine holds memory and CPU for its containers; stopping ones you aren't using frees them."
         )
     }
 
@@ -906,7 +906,7 @@ struct SpotlightReindexNarrative: NarrativeRule {
             culprits: active.map(\.name),
             kind: .narrative
         ).explained(
-            evidence: [totalIO >= activeIOBytes ? "\(who): reading \(formatMBps(totalIO)) from disk"
+            evidence: [totalIO >= activeIOBytes ? "\(who): reading and writing \(formatMBps(totalIO)) on disk"
                                                 : String(format: "%@: %.0f%% CPU", who, totalCPU)],
             impact: "Indexing uses disk and CPU until it finishes."
         )

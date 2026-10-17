@@ -31,18 +31,26 @@ public struct HistoryDigest: Sendable, Equatable {
     public let patterns: [String]
 
     static let windowDays = 7
+    /// A day's worth of watching before an empty week counts as "quiet".
+    static let minWatchedMinutesForQuiet = 24 * 60
     static let nightHours: Set<Int> = [21, 22, 23, 0, 1, 2]
 
     public static func compute(incidents: [DiagnosisIncident], outages: [OutageRecord], changes: [ChannelChange],
-                               networkId: String?, now: Date, calendar: Calendar = .current) -> HistoryDigest {
+                               networkId: String?, now: Date, watchedMinutes: Int = .max,
+                               calendar: Calendar = .current) -> HistoryDigest {
         let since = calendar.date(byAdding: .day, value: -(windowDays - 1), to: calendar.startOfDay(for: now))!
 
         // Only what Whirr actually raised: problems that outlasted the
         // 2-minute gate. Shorter flickers never reached the person.
-        let problems = incidents.filter {
-            $0.tier == .problem && $0.title != ConnectionTitles.outage && $0.lastSeenAt >= since && $0.firstSeenAt <= now
-                && $0.durationSeconds >= VerdictSelector.iconGateSeconds
-        }
+        let problems = incidents
+            .filter { $0.tier == .problem && $0.title != ConnectionTitles.outage && $0.lastSeenAt >= since && $0.firstSeenAt <= now }
+            // Only time inside the window counts toward it.
+            .map { i -> DiagnosisIncident in
+                guard i.firstSeenAt < since else { return i }
+                return DiagnosisIncident(id: i.id, title: i.title, peakSeverity: i.peakSeverity, firstSeenAt: since,
+                                         lastSeenAt: i.lastSeenAt, culprits: i.culprits, tier: i.tier, area: i.area)
+            }
+            .filter { $0.durationSeconds >= VerdictSelector.iconGateSeconds }
         let outs = outages.filter {
             (networkId == nil || $0.networkId == networkId) && $0.start >= since && $0.start <= now
         }
@@ -122,9 +130,15 @@ public struct HistoryDigest: Sendable, Equatable {
             }
             sentences.append(s)
         }
-        let week = sentences.isEmpty
-            ? "A quiet week: no outages and no Mac problems."
-            : "This week: " + sentences.joined(separator: ". ") + "."
+        let week: String
+        if !sentences.isEmpty {
+            week = "This week: " + sentences.joined(separator: ". ") + "."
+        } else if watchedMinutes < minWatchedMinutesForQuiet {
+            // "Quiet" needs watching; say how much Whirr actually saw.
+            week = "Whirr has only watched for \(DurationText.words(seconds: watchedMinutes * 60)) this week, and saw no outages or Mac problems in that time."
+        } else {
+            week = "A quiet week: no outages and no Mac problems."
+        }
 
         // MARK: Patterns
         var patterns: [String] = []
@@ -146,7 +160,7 @@ public struct HistoryDigest: Sendable, Equatable {
         var time: [String: Int] = [:]
         for i in list {
             let docker = i.culprits.contains { $0.hasPrefix("com.docker.") }
-            for owner in Set(i.culprits.map { CulpritOwner.owner(of: $0, dockerRunning: docker) }) {
+            for owner in Set(i.culprits.map { friendly(CulpritOwner.owner(of: $0, dockerRunning: docker)) }) {
                 time[owner, default: 0] += i.durationSeconds
             }
         }
@@ -159,9 +173,12 @@ public struct HistoryDigest: Sendable, Equatable {
     static func label(for i: DiagnosisIncident) -> String {
         guard let culprit = i.culprits.first else { return i.title }
         let docker = i.culprits.contains { $0.hasPrefix("com.docker.") }
-        var owner = CulpritOwner.owner(of: culprit, dockerRunning: docker)
-        if owner.hasPrefix("com.apple.Virtualization") { owner = "Virtualization VM" }
+        let owner = friendly(CulpritOwner.owner(of: culprit, dockerRunning: docker))
         return i.title.contains(owner) ? i.title : "\(i.title) (\(owner))"
+    }
+
+    static func friendly(_ owner: String) -> String {
+        owner.hasPrefix("com.apple.Virtualization") ? "Virtualization VM" : owner
     }
 
     static func shortCause(_ c: OutageCause) -> String {

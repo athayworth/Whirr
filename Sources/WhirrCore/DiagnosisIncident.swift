@@ -53,16 +53,25 @@ public struct DiagnosisIncident: Codable, Sendable, Hashable, Identifiable {
         firstSeenAt = try c.decode(Date.self, forKey: .firstSeenAt)
         lastSeenAt = try c.decode(Date.self, forKey: .lastSeenAt)
         culprits = try c.decodeIfPresent([String].self, forKey: .culprits) ?? []
-        tier = try c.decodeIfPresent(Diagnosis.Tier.self, forKey: .tier) ?? Self.legacyTier(title)
+        tier = try c.decodeIfPresent(Diagnosis.Tier.self, forKey: .tier) ?? Self.legacyTier(title, peak: peakSeverity)
         area = try c.decodeIfPresent(Diagnosis.Area.self, forKey: .area) ?? Self.legacyArea(title)
     }
 
-    /// Titles that were always notes. (A low-disk warning was a note too,
-    /// but old entries can't tell warning from critical, so it stays a
-    /// problem — rare, and still true.)
-    static func legacyTier(_ title: String) -> Diagnosis.Tier {
-        [DiagnosisTitles.swapVolumeOnly, DiagnosisTitles.idleHogs, DiagnosisTitles.dockerStrain].contains(title)
-            ? .note : .problem
+    /// Classifies entries logged before tiers were recorded, the way the
+    /// classifier would have, using the peak severity they did record.
+    /// Ambiguous Docker entries count as notes so nothing is invented.
+    static func legacyTier(_ title: String, peak: Severity) -> Diagnosis.Tier {
+        switch title {
+        case DiagnosisTitles.swapVolumeOnly, DiagnosisTitles.idleHogs,
+             DiagnosisTitles.dockerStrain, DiagnosisTitles.dockerMajorLoad:
+            return .note
+        case DiagnosisTitles.backupUsing:
+            return peak == .ok ? .note : .problem
+        case DiagnosisTitles.lowDisk:
+            return peak == .critical ? .problem : .note
+        default:
+            return .problem
+        }
     }
 
     static func legacyArea(_ title: String) -> Diagnosis.Area {

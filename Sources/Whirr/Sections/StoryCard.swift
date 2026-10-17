@@ -50,7 +50,9 @@ struct QuietMenu: View {
     var body: some View {
         Menu {
             Button("Snooze for 1 hour") { story.titles.forEach { monitor.snoozeStore.snooze($0) } }
-            Button("This is normal for me") { story.titles.forEach { monitor.snoozeStore.mute($0) } }
+            // Muting is permanent, so only the story's own findings — never
+            // system-wide ones that joined it this time.
+            Button("This is normal for me") { story.muteTitles.forEach { monitor.snoozeStore.mute($0) } }
         } label: {
             Image(systemName: "ellipsis.circle")
         }
@@ -189,6 +191,12 @@ struct AnswerCard: View {
         } else if let first = pending.first {
             card(tint: .secondary, symbol: "eye", title: "Keeping an eye on something — \(first.phrase).",
                  detail: "Whirr waits a couple of minutes before raising a problem, so brief blips stay quiet.")
+        } else if area != .mac && area != .developer && !monitor.net.connection.isMeasured {
+            // No connection findings yet only means no checks yet.
+            card(tint: .secondary, symbol: "hourglass",
+                 title: area == nil ? "No problems with your Mac right now. Still checking your connection…"
+                                    : "Checking your connection…",
+                 detail: nil)
         } else {
             card(tint: .green, symbol: "checkmark.circle.fill", title: calmTitle, detail: nil)
         }

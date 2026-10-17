@@ -8,7 +8,7 @@ public enum CulpritOwner {
         // Docker Desktop runs containers in Apple's Virtualization VM; the
         // VM only counts as Docker while Docker's backend is running.
         if dockerRunning && culprit.contains("Virtualization") { return "Docker" }
-        if culprit.hasPrefix("bz") { return "Backblaze" }
+        if ["bzserv", "bztransmit", "bzfilelist", "bzbmenu"].contains(culprit) { return "Backblaze" }
         if culprit.hasPrefix("backupd") { return "Time Machine" }
         return culprit
     }

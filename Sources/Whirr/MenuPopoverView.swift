@@ -77,7 +77,9 @@ struct MenuPopoverView: View {
         if let pending = monitor.verdict.pendingStories.first {
             return "Keeping an eye on something — \(pending.phrase)."
         }
-        return "All good right now."
+        return monitor.net.connection.isMeasured
+            ? "All good right now."
+            : "No problems with your Mac right now. Still checking your connection…"
     }
 
     private func open(_ story: Story) {
