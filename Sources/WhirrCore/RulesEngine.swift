@@ -17,7 +17,8 @@ public struct RulesEngine: Sendable {
         bundleIdentifier: @escaping @Sendable (ProcessSample) -> String? = { _ in nil },
         recentlyActiveBundleIds: Set<String> = [],
         connection: ConnectionSnapshot? = nil,
-        secondsPerSample: Double = 3
+        secondsPerSample: Double = 3,
+        seesAllProcesses: Bool = true
     ) -> [Diagnosis] {
         let core = CoreContext(
             snapshot: snapshot,
@@ -28,7 +29,8 @@ public struct RulesEngine: Sendable {
             bundleIdentifier: bundleIdentifier,
             recentlyActiveBundleIds: recentlyActiveBundleIds,
             connection: connection,
-            secondsPerSample: secondsPerSample
+            secondsPerSample: secondsPerSample,
+            seesAllProcesses: seesAllProcesses
         )
 
         var standalone: [Diagnosis] = []
@@ -130,6 +132,9 @@ public struct CoreContext {
     /// copy is true at any sampling interval (daemon: 3 s; in-app: the
     /// user's setting).
     public let secondsPerSample: Double
+    /// False when only this user's processes are visible (no daemon), so
+    /// "share of all CPU in use" can't be computed honestly.
+    public let seesAllProcesses: Bool
 
     public init(
         snapshot: SystemSnapshot,
@@ -140,8 +145,10 @@ public struct CoreContext {
         bundleIdentifier: @escaping @Sendable (ProcessSample) -> String? = { _ in nil },
         recentlyActiveBundleIds: Set<String> = [],
         connection: ConnectionSnapshot? = nil,
-        secondsPerSample: Double = 3
+        secondsPerSample: Double = 3,
+        seesAllProcesses: Bool = true
     ) {
+        self.seesAllProcesses = seesAllProcesses
         self.connection = connection
         self.secondsPerSample = secondsPerSample
         self.snapshot = snapshot
@@ -724,7 +731,8 @@ struct DockerStrainNarrative: NarrativeRule {
         let memoryShare = totalRAM > 0 ? Double(totalMemory) / Double(totalRAM) : 0
         let allCPU = ctx.processes.reduce(0.0) { $0 + $1.cpuPercent }
         let cpuShare = allCPU > 0 ? totalCPU / allCPU : 0
-        let isMajor = memoryShare >= 0.25 || (cpuShare >= 0.4 && totalCPU >= config.cpuWarnPercent)
+        let isMajor = memoryShare >= 0.25
+            || (ctx.seesAllProcesses && cpuShare >= 0.4 && totalCPU >= config.cpuWarnPercent)
 
         // If we have per-container stats from the Docker socket, name the
         // heaviest container directly instead of telling the user to run
@@ -748,7 +756,9 @@ struct DockerStrainNarrative: NarrativeRule {
         }
 
         let shareNote = isMajor
-            ? String(format: " That's %.0f%% of this Mac's memory and %.0f%% of all CPU in use.", memoryShare * 100, cpuShare * 100)
+            ? (ctx.seesAllProcesses
+                ? String(format: " That's %.0f%% of this Mac's memory and %.0f%% of all CPU in use.", memoryShare * 100, cpuShare * 100)
+                : String(format: " That's %.0f%% of this Mac's memory.", memoryShare * 100))
             : ""
         return Diagnosis(
             title: isMajor ? DiagnosisTitles.dockerMajorLoad : DiagnosisTitles.dockerStrain,

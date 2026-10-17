@@ -166,7 +166,9 @@ public actor SamplingPipeline {
             bundleIdentifier: { ProcessDescriptor.shared.bundleIdentifier(for: $0) },
             recentlyActiveBundleIds: recentlyActiveBundleIds,
             connection: connection,
-            secondsPerSample: secondsPerSample
+            secondsPerSample: secondsPerSample,
+            // Without the daemon only this user's processes are visible.
+            seesAllProcesses: false
         )
         return buildResult(
             snapshot: snapshot,

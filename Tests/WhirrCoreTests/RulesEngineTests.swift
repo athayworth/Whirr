@@ -699,6 +699,22 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertNotNil(result.first { $0.title == DiagnosisTitles.dockerMajorLoad })
     }
 
+    func testDockerCPUShareIsNotJudgedWithoutTheFullProcessList() {
+        // Without the background helper, other users' processes are
+        // invisible, so Docker's share of "all CPU" would be overstated.
+        let result = engine.evaluate(
+            snapshot: snapshot(used: 32 * .gb, available: 32 * .gb),
+            processes: [
+                process(pid: 1, name: "com.docker.backend", cpu: 20, mem: 1 * .gb),
+                process(pid: 2, name: "com.apple.Virtualization.Virtua", cpu: 280, mem: 3 * .gb),
+                process(pid: 3, name: "Safari", cpu: 40, mem: 1 * .gb)
+            ],
+            seesAllProcesses: false
+        )
+        XCTAssertNil(result.first { $0.title == DiagnosisTitles.dockerMajorLoad })
+        XCTAssertNotNil(result.first { $0.title == DiagnosisTitles.dockerStrain })
+    }
+
     // MARK: - DockerStrainNarrative
 
     func testDockerNarrativeFiresWhenDockerHeavy() {

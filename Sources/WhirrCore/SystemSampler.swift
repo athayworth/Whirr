@@ -136,8 +136,7 @@ public final class SystemSampler: @unchecked Sendable {
         return LoadAverage(oneMinute: loads[0], fiveMinute: loads[1], fifteenMinute: loads[2])
     }
 
-    /// Memory pressure as macOS itself judges it. The kernel's level
-    /// (the same one Activity Monitor's pressure graph uses) is read every
+    /// Memory pressure as macOS itself judges it. The kernel's level is read every
     /// sample; the dispatch-source event is a fallback, and the hand-rolled
     /// ratio is used only if neither is available. macOS deliberately
     /// keeps very little memory free, so the ratio alone over-reports.

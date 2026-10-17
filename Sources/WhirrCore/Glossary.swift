@@ -97,7 +97,7 @@ public enum Glossary {
             case .outage:
                 return "At least \(Int(OutageDetector.minDuration)) seconds in a row when nothing on the internet answered."
             case .memoryPressure:
-                return "macOS's own judgment of how hard it's working to find memory for your apps — the same reading Activity Monitor shows."
+                return "macOS's own judgment of how hard it's working to find memory for your apps, read straight from the system."
             case .swap:
                 return "Memory macOS has moved to disk to make room. It only slows things down while macOS keeps reading it back."
             case .cpu:
