@@ -80,3 +80,28 @@ public struct ConnectionStats: Sendable {
         return sorted.count % 2 == 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
     }
 }
+
+/// One shared reading of a hop's health, so the live rows, the report
+/// card, the daily summary and the findings never disagree.
+public enum HopHealth: Sendable, Equatable {
+    /// Not enough pings yet to judge.
+    case measuring
+    /// Under the "clean" limits.
+    case steady
+    /// Some stalls, below the level the findings warn about.
+    case minor
+    /// At or above the findings' warning level.
+    case stalling
+
+    public init(_ stats: HopStats, config: ConnectionRuleConfig = ConnectionRuleConfig()) {
+        if stats.count < config.minSamples {
+            self = .measuring
+        } else if stats.spikes < config.cleanMaxSpikes && stats.lossPercent < config.cleanMaxLoss {
+            self = .steady
+        } else if stats.spikes < config.spikyWarnSpikes && stats.lossPercent < config.spikyWarnLoss {
+            self = .minor
+        } else {
+            self = .stalling
+        }
+    }
+}

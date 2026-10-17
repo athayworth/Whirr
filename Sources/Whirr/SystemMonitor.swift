@@ -356,13 +356,17 @@ extension SystemMonitor {
         let runner = connectionTestRunner
         let store = connectionStore
         let passive = connectionMonitor
+        // Frozen now, so the saved result is always graded against the
+        // 10 minutes before it — not whatever is happening when viewed.
+        let before = PassiveBefore(gateway: connection.gateway10m, internet: connection.internet10m,
+                                   gatewayPingable: connection.gatewayPingable, isWired: connection.isWired)
         Task { [weak self] in
             // The test saturates the line on purpose. Passive pings taken
             // meanwhile would record self-inflicted stalls into history
             // and skew the per-channel comparison, so pause them.
             await passive.setPaused(true)
             defer { Task { await passive.setPaused(false) } }
-            let result = await runner.run { phase in
+            let result = await runner.run(before: before) { phase in
                 Task { @MainActor in self?.connectionTestPhase = phase == .done ? nil : phase }
             }
             store.saveTest(result)

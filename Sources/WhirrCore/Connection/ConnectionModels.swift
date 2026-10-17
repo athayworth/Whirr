@@ -55,17 +55,23 @@ public struct WiFiLink: Codable, Sendable, Equatable {
     }
 }
 
-/// Neighbor networks seen on one channel during a scan.
-public struct NeighborCount: Codable, Sendable, Equatable {
+/// One Wi-Fi network heard during a scan. No name or hardware address:
+/// macOS only reveals those with Location permission, which Whirr
+/// doesn't ask for — so Whirr can't tell which entry is your own router.
+public struct NeighborNetwork: Codable, Sendable, Equatable {
     public let channel: Int
     public let band: String
-    public let count: Int
+    public let widthMHz: Int
+    public let rssi: Int
 
-    public init(channel: Int, band: String, count: Int) {
+    public init(channel: Int, band: String, widthMHz: Int, rssi: Int) {
         self.channel = channel
         self.band = band
-        self.count = count
+        self.widthMHz = widthMHz
+        self.rssi = rssi
     }
+
+    public var block: ChannelBlock { WiFiSpectrum.occupied(band: band, channel: channel, widthMHz: widthMHz) }
 }
 
 public struct GatewayInfo: Sendable, Equatable {

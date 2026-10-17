@@ -58,10 +58,7 @@ struct ConnectionSection: View {
                 Text("Last run \(test.at.formatted(.relative(presentation: .named)))")
                     .font(.caption).foregroundStyle(.secondary)
                 VStack(spacing: 8) {
-                    ForEach(ConnectionReportCard.rows(for: test,
-                                                      passiveGateway: monitor.connection.gateway10m,
-                                                      passiveInternet: monitor.connection.internet10m,
-                                                      isWired: monitor.connection.isWired)) { row in
+                    ForEach(ConnectionReportCard.rows(for: test)) { row in
                         ReportRowView(row: row)
                     }
                 }

@@ -64,7 +64,7 @@ extension ConnectionHistoryStoreTests {
         let store = ConnectionHistoryStore(directory: dir)
         for i in 0..<55 {
             store.saveTest(ConnectionTestResult(at: t0.addingTimeInterval(Double(i)), networkId: "home", nq: nil,
-                                                gatewayIdle: .empty, gatewayLoaded: .empty, link: nil, neighbors: []))
+                                                gatewayIdle: .empty, gatewayLoaded: .empty, link: nil, neighbors: nil, before: nil))
         }
         let tests = ConnectionHistoryStore(directory: dir).tests()
         XCTAssertEqual(tests.count, 50)

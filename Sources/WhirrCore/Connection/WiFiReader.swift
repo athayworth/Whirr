@@ -5,8 +5,9 @@ public protocol WiFiReading: Sendable {
     /// Current association, or nil when Wi-Fi is off / not associated.
     func currentLink() -> WiFiLink?
     /// One active scan. Briefly takes the radio off-channel — only ever
-    /// call this from the user-triggered connection test.
-    func scanNeighbors() -> [NeighborCount]
+    /// call this from the user-triggered connection test. nil when the
+    /// scan failed; never an empty list standing in for a failure.
+    func scanNeighbors() -> [NeighborNetwork]?
 }
 
 public struct CoreWLANReader: WiFiReading {
@@ -30,19 +31,17 @@ public struct CoreWLANReader: WiFiReading {
         )
     }
 
-    public func scanNeighbors() -> [NeighborCount] {
+    public func scanNeighbors() -> [NeighborNetwork]? {
         guard let iface = CWWiFiClient.shared().interface(),
-              let networks = try? iface.scanForNetworks(withSSID: nil) else { return [] }
-        var counts: [String: (channel: Int, band: String, count: Int)] = [:]
-        for network in networks {
-            guard let channel = network.wlanChannel else { continue }
-            let band = Self.bandName(channel)
-            let key = "\(band)-\(channel.channelNumber)"
-            counts[key, default: (channel.channelNumber, band, 0)].count += 1
+              let networks = try? iface.scanForNetworks(withSSID: nil) else { return nil }
+        let heard = networks.compactMap { network -> NeighborNetwork? in
+            guard let channel = network.wlanChannel else { return nil }
+            return NeighborNetwork(channel: channel.channelNumber, band: Self.bandName(channel),
+                                   widthMHz: Self.widthMHz(channel), rssi: network.rssiValue)
         }
-        return counts.values
-            .map { NeighborCount(channel: $0.channel, band: $0.band, count: $0.count) }
-            .sorted { ($0.band, $0.channel) < ($1.band, $1.channel) }
+        // The Mac's own network is always audible while connected, so an
+        // empty result means the scan didn't really happen.
+        return heard.isEmpty ? nil : heard.sorted { ($0.band, $0.channel, $0.rssi) < ($1.band, $1.channel, $1.rssi) }
     }
 
     static func bandName(_ channel: CWChannel) -> String {

@@ -16,6 +16,23 @@ public struct NetworkQualityResult: Codable, Sendable, Equatable {
     }
 }
 
+/// The background connection stats from the 10 minutes before a test,
+/// frozen into the result so an old test is never graded with today's
+/// numbers.
+public struct PassiveBefore: Codable, Sendable, Equatable {
+    public let gateway: HopStats
+    public let internet: HopStats
+    public let gatewayPingable: Bool
+    public let isWired: Bool
+
+    public init(gateway: HopStats, internet: HopStats, gatewayPingable: Bool, isWired: Bool) {
+        self.gateway = gateway
+        self.internet = internet
+        self.gatewayPingable = gatewayPingable
+        self.isWired = isWired
+    }
+}
+
 public struct ConnectionTestResult: Codable, Sendable, Identifiable, Equatable {
     public let id: UUID
     public let at: Date
@@ -27,10 +44,15 @@ public struct ConnectionTestResult: Codable, Sendable, Identifiable, Equatable {
     /// line — the piece that tells Wi-Fi bloat from ISP/router bloat.
     public let gatewayLoaded: HopStats
     public let link: WiFiLink?
-    public let neighbors: [NeighborCount]
+    /// Networks heard by the scan. nil = no usable scan (Wi-Fi off, scan
+    /// failed, or a result saved by an older Whirr without widths).
+    public let neighbors: [NeighborNetwork]?
+    /// nil for results saved before Whirr recorded this.
+    public let before: PassiveBefore?
 
     public init(id: UUID = UUID(), at: Date, networkId: String?, nq: NetworkQualityResult?,
-                gatewayIdle: HopStats, gatewayLoaded: HopStats, link: WiFiLink?, neighbors: [NeighborCount]) {
+                gatewayIdle: HopStats, gatewayLoaded: HopStats, link: WiFiLink?,
+                neighbors: [NeighborNetwork]?, before: PassiveBefore?) {
         self.id = id
         self.at = at
         self.networkId = networkId
@@ -39,6 +61,26 @@ public struct ConnectionTestResult: Codable, Sendable, Identifiable, Equatable {
         self.gatewayLoaded = gatewayLoaded
         self.link = link
         self.neighbors = neighbors
+        self.before = before
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        at = try c.decode(Date.self, forKey: .at)
+        networkId = try c.decodeIfPresent(String.self, forKey: .networkId)
+        nq = try c.decodeIfPresent(NetworkQualityResult.self, forKey: .nq)
+        gatewayIdle = try c.decode(HopStats.self, forKey: .gatewayIdle)
+        gatewayLoaded = try c.decode(HopStats.self, forKey: .gatewayLoaded)
+        link = try c.decodeIfPresent(WiFiLink.self, forKey: .link)
+        // Older results stored per-channel counts without widths; they
+        // can't be graded honestly, so they read as "not recorded".
+        neighbors = (try? c.decodeIfPresent([NeighborNetwork].self, forKey: .neighbors)) ?? nil
+        before = (try? c.decodeIfPresent(PassiveBefore.self, forKey: .before)) ?? nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, at, networkId, nq, gatewayIdle, gatewayLoaded, link, neighbors, before
     }
 }
 
@@ -71,7 +113,7 @@ public actor ConnectionTestRunner {
         self.gateway = gateway
     }
 
-    public func run(onPhase: @escaping @Sendable (Phase) -> Void) async -> ConnectionTestResult {
+    public func run(before: PassiveBefore?, onPhase: @escaping @Sendable (Phase) -> Void) async -> ConnectionTestResult {
         let gw = gateway()
         let start = Date()
 
@@ -86,11 +128,12 @@ public actor ConnectionTestRunner {
 
         onPhase(.scanning)
         let link = wifi.currentLink()
-        let neighbors = link == nil ? [] : wifi.scanNeighbors()
+        let neighbors = link == nil ? nil : wifi.scanNeighbors()
 
         onPhase(.done)
         return ConnectionTestResult(at: start, networkId: gw?.networkId, nq: nq,
-                                    gatewayIdle: idle, gatewayLoaded: loaded, link: link, neighbors: neighbors)
+                                    gatewayIdle: idle, gatewayLoaded: loaded, link: link, neighbors: neighbors,
+                                    before: before)
     }
 
     private func pingGateway(_ ip: String?, until done: @Sendable () -> Bool) async -> HopStats {

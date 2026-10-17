@@ -25,7 +25,7 @@ final class FakeWiFi: WiFiReading, @unchecked Sendable {
         set { lock.withLock { _link = newValue } }
     }
     func currentLink() -> WiFiLink? { link }
-    func scanNeighbors() -> [NeighborCount] { [] }
+    func scanNeighbors() -> [NeighborNetwork]? { nil }
 }
 
 /// Gateway resolver whose answer tests can change mid-run.
