@@ -303,7 +303,7 @@ struct SettingsView: View {
             Text(versionString)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("A local, privacy-respecting diagnosis of why your Mac is slow.")
+            Text("A local, privacy-respecting look at what's slowing your Mac and your connection.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -313,7 +313,7 @@ struct SettingsView: View {
                 .padding(.top, 4)
 
             Spacer()
-            Text("MIT License · No network (besides update checks) · No telemetry")
+            Text("MIT License · Network use: connection checks you can see in Connection, plus update checks · No telemetry")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .padding(.bottom, 12)

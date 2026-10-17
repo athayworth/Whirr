@@ -93,28 +93,28 @@ struct OnboardingView: View {
             Text("It lives in your menu bar")
                 .font(.title2.bold())
                 .padding(.top, 8)
-            Text("Look for the fanblade icon at the top of your screen. It changes color as things escalate:")
+            Text("Look for the fanblade icon at the top of your screen. It reflects your Mac and your connection, and changes color only after a problem has lasted two minutes:")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 12) {
                 verdictRow(
                     icon: "fanblades",
-                    color: .green,
-                    label: "Safe to keep going",
-                    description: "Comfortable headroom — no action needed."
+                    color: .primary,
+                    label: "Nothing needs attention",
+                    description: "Whirr is watching. Background notes never change the icon."
                 )
                 verdictRow(
                     icon: "fanblades",
                     color: .yellow,
-                    label: "Working fine, watch what you add",
-                    description: "Some pressure. Don't fire up a heavy build without closing something first."
+                    label: "Something needs attention",
+                    description: "For example memory running low, or Wi-Fi stalling. Open Whirr to see what it measured."
                 )
                 verdictRow(
                     icon: "fanblades.fill",
                     color: .red,
-                    label: "Under pressure — close something",
-                    description: "The machine is struggling now. Whirr names the biggest offender so you know what to close."
+                    label: "A serious problem",
+                    description: "For example memory saturated, or the internet down. Whirr says what it saw and what you can do."
                 )
             }
             .padding(.leading, 4)
@@ -148,18 +148,18 @@ struct OnboardingView: View {
 
             featureRow(
                 icon: "list.bullet.rectangle.portrait",
-                title: "Diagnoses tell you what's wrong",
-                description: "Each row names a specific issue — memory pressure, thermal throttle, a runaway process — and tells you what to do about it. Duration and trend badges show whether it's getting worse."
+                title: "Findings say what Whirr measured",
+                description: "Each finding names what Whirr saw — memory running low, Wi-Fi stalling, a process stuck at full CPU — and what you can do about it. Whirr only names a cause when its measurements show it."
             )
             featureRow(
-                icon: "bell.slash",
-                title: "Snooze what you already know",
-                description: "Not every warning needs attention right now. Click the bell icon on any row to mute it for an hour, four hours, or until tomorrow."
+                icon: "moon.zzz",
+                title: "Quiet what you already know",
+                description: "Use the ⋯ menu on a finding to snooze it for an hour, or choose \"This is normal for me\" to stop seeing it. Settings → Quieted lists everything you've quieted."
             )
             featureRow(
-                icon: "chart.bar.xaxis",
-                title: "Insights show your patterns",
-                description: "Open Settings → Insights to see which diagnoses fire most often and when. Helps you spot habits (\"Docker is heavy every afternoon\")."
+                icon: "book",
+                title: "Learn as you go",
+                description: "Not sure what a term means? Click any ⓘ, or open Learn in the sidebar for plain-English explanations."
             )
             Spacer()
         }
