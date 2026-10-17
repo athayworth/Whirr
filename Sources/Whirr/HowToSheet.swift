@@ -147,8 +147,8 @@ struct HowToContent {
             )
         case .ispOutage:
             return HowToContent(
-                title: "Your internet line is down",
-                intro: "Your router is working, but nothing beyond it is reachable.",
+                title: "Internet is down beyond your router",
+                intro: "Your router answers Whirr's checks, but nothing beyond it does. The break is somewhere between your router and the internet: the router's internet connection, the modem, or your provider.",
                 steps: [
                     "Check your provider's app or website for a reported outage in your area.",
                     "Restarting the router rarely fixes a line outage, but it's harmless to try.",
