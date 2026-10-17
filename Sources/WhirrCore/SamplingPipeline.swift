@@ -31,6 +31,8 @@ public actor SamplingPipeline {
         public let daemonStatus: DaemonStatus
         /// Real time between process samples (see CoreContext).
         public let secondsPerSample: Double
+        /// Each owner's share of CPU and memory in this sample.
+        public let ownerLoad: OwnerLoad
 
         public enum Source: Sendable { case daemon, inProcess }
 
@@ -46,9 +48,11 @@ public actor SamplingPipeline {
             harbrStatuses: [HarbrProjectStatus],
             source: Source,
             daemonStatus: DaemonStatus = .absent,
-            secondsPerSample: Double = 3
+            secondsPerSample: Double = 3,
+            ownerLoad: OwnerLoad = .empty
         ) {
             self.secondsPerSample = secondsPerSample
+            self.ownerLoad = ownerLoad
             self.snapshot = snapshot
             self.processes = processes
             self.diagnosisContexts = diagnosisContexts
@@ -260,7 +264,13 @@ public actor SamplingPipeline {
             harbrStatuses: harbrStatuses,
             source: source,
             daemonStatus: daemonStatus,
-            secondsPerSample: secondsPerSample
+            secondsPerSample: secondsPerSample,
+            ownerLoad: OwnerLoad.compute(
+                processes: processes,
+                totalRAM: snapshot.memoryUsedBytes &+ snapshot.memoryAvailableBytes,
+                describer: { ProcessDescriptor.shared.friendlyName(for: $0) },
+                seesAllProcesses: source == .daemon
+            )
         )
     }
 
