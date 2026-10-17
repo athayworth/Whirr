@@ -226,6 +226,24 @@ enum DiagnosisTitles {
 
 // MARK: - Rules
 
+/// Shared "how Whirr knows" phrasing, so findings describe the same
+/// measurement the same way.
+enum Evidence {
+    static func gb(_ bytes: UInt64) -> String { String(format: "%.1f GB", Double(bytes) / 1_073_741_824) }
+
+    static func pressure(_ p: MemoryPressure) -> String {
+        switch p {
+        case .normal: return "macOS memory pressure: normal"
+        case .warning: return "macOS memory pressure: elevated"
+        case .critical: return "macOS memory pressure: high"
+        }
+    }
+
+    static func memory(_ s: SystemSnapshot) -> [String] {
+        [pressure(s.memoryPressure), "Memory in use: \(gb(s.memoryUsedBytes)), available: \(gb(s.memoryAvailableBytes))"]
+    }
+}
+
 struct MemoryPressureRule: Rule {
     let config: MemoryPressureRuleConfig
     var isEnabled: Bool { config.enabled }
@@ -236,13 +254,15 @@ struct MemoryPressureRule: Rule {
                 title: "Memory is saturated",
                 detail: "macOS reports high memory pressure: it's working hard to find memory for your apps, so they may stutter. Quitting apps you aren't using frees memory fastest.",
                 severity: .critical
-            )
+            ).explained(evidence: Evidence.memory(ctx.snapshot),
+                        impact: "When memory runs out, macOS compresses and swaps it, and apps stall while they wait.")
         case .warning:
             return Diagnosis(
                 title: "Memory is tight",
                 detail: "macOS reports elevated memory pressure. Quitting apps you aren't using will help.",
                 severity: .warning
-            )
+            ).explained(evidence: Evidence.memory(ctx.snapshot),
+                        impact: "Opening more apps now can push the Mac into swapping, which slows everything.")
         case .normal:
             return nil
         }
@@ -280,6 +300,11 @@ struct SwapThrashingRule: Rule {
                     gb, Int(rate)
                 ),
                 severity: severity
+            ).explained(
+                evidence: ["Reading about \(Int(rate)) pages per second back from swap",
+                           String(format: "Swap in use: %.1f GB", gb),
+                           Evidence.pressure(ctx.snapshot.memoryPressure)],
+                impact: "Reading memory back from disk is far slower than from RAM — that's the sluggishness."
             )
         }
 
@@ -293,7 +318,8 @@ struct SwapThrashingRule: Rule {
                 gb
             ),
             severity: .warning
-        )
+        ).explained(evidence: [String(format: "Swap in use: %.1f GB", gb), "Pages being read back from swap: none right now"],
+                    impact: nil)
     }
 }
 
@@ -307,13 +333,15 @@ struct ThermalThrottleRule: Rule {
                 title: "CPU is critically hot",
                 detail: "macOS is aggressively throttling to cool down. Performance will be much lower than normal.",
                 severity: .critical
-            )
+            ).explained(evidence: ["macOS thermal state: critical"],
+                        impact: "The Mac slows its processor a lot to cool down, so everything runs slower.")
         case .serious:
             return Diagnosis(
                 title: "CPU is throttling from heat",
                 detail: "Performance is being held back to cool down. Keep the vents clear and off soft surfaces; heavy work adds heat.",
                 severity: .warning
-            )
+            ).explained(evidence: ["macOS thermal state: serious"],
+                        impact: "The Mac slows its processor to cool down, so everything runs slower.")
         case .fair, .nominal:
             return nil
         }
@@ -335,6 +363,9 @@ struct OverloadedSystemRule: Rule {
                 load, ctx.coreCount, ratio
             ),
             severity: ratio >= config.criticalRatio ? .critical : .warning
+        ).explained(
+            evidence: [String(format: "Workload: %.1f on %d cores (%.1f× capacity)", load, ctx.coreCount, ratio)],
+            impact: "With every core busy, apps and games wait their turn — that's the stutter."
         )
     }
 }
@@ -389,6 +420,9 @@ struct BackupHoggingRule: Rule {
             detail: detail,
             severity: severity,
             culprits: active.map(\.name)
+        ).explained(
+            evidence: ["\(names): \(formatMBps(totalIO)) of disk activity, " + String(format: "%.0f%% CPU", totalCPU)],
+            impact: "A backup reading and writing the disk competes with your apps for it."
         )
     }
 }
@@ -426,6 +460,9 @@ struct HighDiskIORule: Rule {
             ),
             severity: worst.diskIOBytesPerSec >= criticalBytes ? .critical : .warning,
             culprits: heavy.prefix(3).map(\.name)
+        ).explained(
+            evidence: ["\(worst.name) is \(verb) \(formatMBps(worst.diskIOBytesPerSec))"],
+            impact: "Heavy disk use can slow apps that need the disk at the same time."
         )
     }
 }
@@ -448,6 +485,11 @@ struct LowDiskSpaceRule: Rule {
                 freeGB, ctx.snapshot.rootDiskPercentUsed, config.warningFreeGB
             ),
             severity: severity
+        ).explained(
+            evidence: [String(format: "Free: %.1f GB of %.0f GB (%.0f%% full)", freeGB,
+                              Double(ctx.snapshot.rootDiskTotalBytes) / 1_073_741_824, ctx.snapshot.rootDiskPercentUsed),
+                       String(format: "Whirr flags below %.0f GB and treats below %.0f GB as serious", config.warningFreeGB, config.criticalFreeGB)],
+            impact: "macOS needs free space for swap, updates and caches."
         )
     }
 }
@@ -477,11 +519,16 @@ struct RunawayProcessRule: Rule {
         return Diagnosis(
             title: "\(friendly) has been pegging CPU",
             detail: String(
-                format: "%@ has been over 60%% CPU for the last %d seconds — currently %.0f%%, pid %d. If you weren't expecting this, the process may be stuck.",
-                identity, durationSeconds, worst.cpuPercent, worst.pid
+                format: "%@ has been over 60%% CPU for %@ — currently %.0f%%. If you weren't expecting this, it may be stuck.",
+                friendly, DurationText.words(seconds: durationSeconds), worst.cpuPercent
             ),
             severity: severity,
             culprits: [friendly]
+        ).explained(
+            evidence: [String(format: "CPU now: %.0f%%", worst.cpuPercent),
+                       "Above 60% CPU for: \(DurationText.words(seconds: durationSeconds))",
+                       "Process: \(identity) (pid \(worst.pid))"],
+            impact: "One process holding the processor leaves less for everything else."
         )
     }
 

@@ -377,7 +377,7 @@ final class RulesEngineTests: XCTestCase {
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         let diag = result.first { $0.title.contains("node") }
         XCTAssertEqual(diag?.severity, .warning)
-        XCTAssertTrue(diag?.detail.contains("seconds") ?? false)
+        XCTAssertTrue(diag?.detail.contains("15 s") ?? false, diag?.detail ?? "")
     }
 
     func testRunawayCriticalWhenVeryHigh() {
@@ -396,7 +396,7 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertEqual(diag?.severity, .critical)
     }
 
-    func testRunawayDetailShowsCommandLineWhenAvailable() {
+    func testRunawayWhyShowsCommandLineWhenAvailable() {
         let proc = process(
             pid: 42, name: "node", cpu: 195,
             commandLine: "node /Users/me/projects/buggy-server.js",
@@ -404,8 +404,8 @@ final class RulesEngineTests: XCTestCase {
         )
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         let diag = result.first { $0.title.contains("node") }
-        XCTAssertTrue(diag?.detail.contains("buggy-server.js") ?? false,
-                      "Detail should include command line: \(diag?.detail ?? "nil")")
+        XCTAssertTrue(diag?.evidence.contains { $0.contains("buggy-server.js") } ?? false,
+                      "How Whirr knows should include the command line: \(diag?.evidence ?? [])")
     }
 
     func testRunawayDetailFallsBackToNameWhenNoCommandLine() {
@@ -856,7 +856,7 @@ final class RulesEngineTests: XCTestCase {
             secondsPerSample: 15
         )
         let runaway = result.first { $0.title.hasSuffix("has been pegging CPU") }
-        XCTAssertTrue(runaway?.detail.contains("300 seconds") ?? false, runaway?.detail ?? "")
+        XCTAssertTrue(runaway?.detail.contains("5 min") ?? false, runaway?.detail ?? "")
     }
 
     func testMemoryLeakIgnoresProcessesBelowFloor() {
@@ -910,6 +910,38 @@ final class RulesEngineTests: XCTestCase {
             ]
         )
         XCTAssertNil(result.first { $0.title == "Big processes that look unused" })
+    }
+
+    // MARK: - Explanations (how Whirr knows / why it matters)
+
+    func testMacFindingsExplainFromTheirInputs() {
+        let pressure = engine.evaluate(snapshot: snapshot(used: 14 * .gb, available: 2 * .gb, pressure: .critical), processes: [])
+        EvidenceAccuracy.assertAllNumbers(pressure.first { $0.title == DiagnosisTitles.memorySaturated }, from: [14, 2])
+        let over = engine.evaluate(snapshot: snapshot(load: LoadAverage(oneMinute: 52.8, fiveMinute: 50, fifteenMinute: 40)), processes: [])
+        let cores = Double(ProcessInfo.processInfo.activeProcessorCount)
+        EvidenceAccuracy.assertAllNumbers(over.first { $0.title == DiagnosisTitles.overloaded }, from: [52.8, cores, 52.8 / cores])
+        let disk = engine.evaluate(snapshot: snapshot(diskFree: 25 * .gb, diskTotal: 1000 * .gb), processes: [])
+        EvidenceAccuracy.assertAllNumbers(disk.first { $0.title == DiagnosisTitles.lowDisk }, from: [25, 1000, 97.5, 30, 10])
+        let paging = engine.evaluate(snapshot: snapshot(pressure: .warning, swap: 3 * .gb, swapInsPerSec: 1500), processes: [])
+        EvidenceAccuracy.assertAllNumbers(paging.first { $0.title == DiagnosisTitles.swapActivelyPaging }, from: [1500, 3])
+        let hot = engine.evaluate(snapshot: snapshot(thermal: .serious), processes: [])
+        XCTAssertFalse(hot.first { $0.title == DiagnosisTitles.thermalWarning }?.evidence.isEmpty ?? true)
+        let busy = engine.evaluate(snapshot: snapshot(), processes: [process(name: "Photos", readBps: 250 * .mb)])
+        EvidenceAccuracy.assertAllNumbers(busy.first { $0.title == DiagnosisTitles.diskBusy }, from: [250])
+        let backup = engine.evaluate(snapshot: snapshot(), processes: [process(name: "bztransmit", cpu: 40, readBps: 12 * .mb)])
+        EvidenceAccuracy.assertAllNumbers(backup.first { $0.title == DiagnosisTitles.backupUsing }, from: [12, 40])
+        for d in pressure + over + disk + paging + hot + busy + backup where d.tier == .problem {
+            XCTAssertNotNil(d.impact, d.title)
+        }
+    }
+
+    func testRunawayDetailHasNoPathOrPidButEvidenceDoes() {
+        let p = process(pid: 29168, name: "node", cpu: 198, commandLine: "/usr/local/bin/node server.js", sustained: 20)
+        let r = engine.evaluate(snapshot: snapshot(), processes: [p]).first { $0.title.hasSuffix(DiagnosisTitles.runawaySuffix) }
+        XCTAssertFalse(r?.detail.contains("29168") ?? true)
+        XCTAssertFalse(r?.detail.contains("/usr/local") ?? true)
+        XCTAssertTrue(r?.evidence.contains { $0.contains("29168") } ?? false)
+        XCTAssertTrue(r?.detail.contains("1 min") ?? false, r?.detail ?? "")  // 20 × 3 s
     }
 }
 
