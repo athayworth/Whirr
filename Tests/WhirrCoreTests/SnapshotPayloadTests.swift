@@ -77,3 +77,14 @@ final class MemoryPressureResolutionTests: XCTestCase {
         XCTAssertNotNil(SystemSampler.kernelPressureLevel(), "kern.memorystatus_vm_pressure_level should be readable unprivileged")
     }
 }
+
+final class SwapInCounterTests: XCTestCase {
+    func testActivelyPagingIsBuiltOnSwapInsNotFilePageIns() {
+        // Opening an app pages in thousands of file pages; none of that
+        // is swap. Only swap-ins mean macOS is reading swapped memory back.
+        var vm = vm_statistics64_data_t()
+        vm.pageins = 1_980_716_589
+        vm.swapins = 213_738_824
+        XCTAssertEqual(SystemSampler.swapInCounter(vm), 213_738_824)
+    }
+}

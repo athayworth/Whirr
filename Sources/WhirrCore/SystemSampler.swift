@@ -56,7 +56,7 @@ public final class SystemSampler: @unchecked Sendable {
         let availableBytes = freeBytes + inactiveBytes + speculativeBytes
 
         let (rootFree, rootTotal) = Self.rootDiskUsage()
-        let swapInsPerSec = updateSwapInsRate(current: vm.pageins)
+        let swapInsPerSec = updateSwapInsRate(current: Self.swapInCounter(vm))
 
         return SystemSnapshot(
             memoryUsedBytes: usedBytes,
@@ -69,6 +69,11 @@ public final class SystemSampler: @unchecked Sendable {
             rootDiskTotalBytes: rootTotal,
             swapInsPerSecond: swapInsPerSec
         )
+    }
+
+    /// The cumulative counter "actively paging" is built on.
+    static func swapInCounter(_ vm: vm_statistics64_data_t) -> UInt64 {
+        vm.swapins
     }
 
     private func updateSwapInsRate(current: UInt64) -> Double {
