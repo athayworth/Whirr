@@ -266,7 +266,7 @@ final class SystemMonitor {
         self.diagnosisContexts = result.diagnosisContexts
         self.verdict = VerdictSelector.select(result.diagnosisContexts, isHidden: { [snoozeStore] title in
             snoozeStore.isSnoozed(title) || snoozeStore.isMuted(title)
-        })
+        }, load: result.ownerLoad)
         self.headroom = result.headroom
         self.secondsPerSample = result.secondsPerSample
         self.harbrStatuses = result.harbrStatuses
@@ -305,9 +305,10 @@ final class SystemMonitor {
         self.lastUpdated = Date()
         // Notifications only for problems that pass the notify gate
         // (critical, ≥ 5 min, actionable) and aren't snoozed or muted.
-        let notifiable = result.diagnosisContexts
-            .filter { !isHidden($0.diagnosis.title) && VerdictSelector.shouldNotify($0) }
-            .map(\.diagnosis)
+        // One notification per story, so one cause can't raise several.
+        let notifiable = verdict.stories
+            .filter(VerdictSelector.shouldNotify)
+            .map(\.headline.diagnosis)
         notifications.process(notifiable, presentTitles: Set(result.diagnoses.map(\.title)))
     }
 }

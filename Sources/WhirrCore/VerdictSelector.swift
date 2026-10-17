@@ -1,29 +1,39 @@
 import Foundation
 
-/// The Overview's answer to "what's the one thing wrong right now?"
+/// The Overview's answer to "what's wrong right now, and what do I do?"
 public struct Verdict: Sendable, Equatable {
-    /// The single most important problem, or nil when all clear.
-    public let headline: DiagnosisContext?
-    /// Other gated problems, most important first ("Also: …" lines).
-    public let also: [DiagnosisContext]
-    /// Worst gated-problem severity per sidebar area. Missing = fine.
+    /// Problem stories past the gate, most important first.
+    public let stories: [Story]
+    /// Problem stories still inside the gate — not loud yet, but "all
+    /// clear" would be a false reassurance while they exist.
+    public let pendingStories: [Story]
+    /// Stories whose headline is a note.
+    public let notes: [Story]
+    /// Worst gated-story severity per sidebar area. Missing = fine.
     public let areaSeverity: [Diagnosis.Area: Severity]
-    /// Visible problems still inside the gate. Not loud yet, but their
-    /// presence means "all clear" would be a false reassurance — every
-    /// problem is young right after launch.
-    public let pending: [DiagnosisContext]
+    /// "Your Mac is overloaded, and your link to the router is stalling."
+    public let sentence: String?
 
+    public var headline: DiagnosisContext? { stories.first?.headline }
+    public var also: [DiagnosisContext] { stories.dropFirst().map(\.headline) }
+    public var pending: [DiagnosisContext] { pendingStories.map(\.headline) }
     public var worst: Severity { areaSeverity.values.max() ?? .ok }
-    public var isAllClear: Bool { headline == nil && pending.isEmpty }
+    public var isAllClear: Bool { stories.isEmpty && pendingStories.isEmpty }
 
-    public static let allClear = Verdict(headline: nil, also: [], areaSeverity: [:])
+    public static let allClear = Verdict(stories: [], pendingStories: [], notes: [], areaSeverity: [:], sentence: nil)
 
-    public init(headline: DiagnosisContext?, also: [DiagnosisContext],
-                areaSeverity: [Diagnosis.Area: Severity], pending: [DiagnosisContext] = []) {
-        self.headline = headline
-        self.also = also
+    public init(stories: [Story], pendingStories: [Story], notes: [Story],
+                areaSeverity: [Diagnosis.Area: Severity], sentence: String?) {
+        self.stories = stories
+        self.pendingStories = pendingStories
+        self.notes = notes
         self.areaSeverity = areaSeverity
-        self.pending = pending
+        self.sentence = sentence
+    }
+
+    /// Stories for one sidebar area: gated, then pending, then notes.
+    public func stories(in area: Diagnosis.Area) -> [Story] {
+        (stories + pendingStories + notes).filter { $0.area == area }
     }
 }
 
@@ -38,23 +48,22 @@ public enum VerdictSelector {
 
     public static func select(
         _ contexts: [DiagnosisContext],
-        isHidden: (String) -> Bool
+        isHidden: (String) -> Bool,
+        load: OwnerLoad = .empty
     ) -> Verdict {
-        let visibleProblems = contexts.filter {
-            $0.diagnosis.tier == .problem && !isHidden($0.diagnosis.title)
-        }
-        let gated = visibleProblems
-            .filter { $0.durationSeconds >= iconGateSeconds }
-            .sorted(by: isMoreImportant)
-        let pending = visibleProblems
-            .filter { $0.durationSeconds < iconGateSeconds }
-            .sorted(by: isMoreImportant)
+        // Hidden members drop out first, so a snoozed headline hands over
+        // to a visible member of the same story.
+        let visible = contexts.filter { !isHidden($0.diagnosis.title) }
+        let all = StoryBuilder.build(visible, load: load)
+        let problems = all.filter(\.isProblem)
+        let gated = problems.filter { $0.durationSeconds >= iconGateSeconds }
+        let pending = problems.filter { $0.durationSeconds < iconGateSeconds }
         var areaSeverity: [Diagnosis.Area: Severity] = [:]
-        for c in gated {
-            areaSeverity[c.diagnosis.area] = max(areaSeverity[c.diagnosis.area] ?? .ok, c.diagnosis.severity)
+        for s in gated {
+            areaSeverity[s.area] = max(areaSeverity[s.area] ?? .ok, s.headline.diagnosis.severity)
         }
-        return Verdict(headline: gated.first, also: Array(gated.dropFirst()),
-                       areaSeverity: areaSeverity, pending: pending)
+        return Verdict(stories: gated, pendingStories: pending, notes: all.filter { !$0.isProblem },
+                       areaSeverity: areaSeverity, sentence: StoryBuilder.sentence(gated))
     }
 
     /// Peak severity in the current streak (so a problem dipping
@@ -73,6 +82,10 @@ public enum VerdictSelector {
 
     /// Notifications are reserved for problems that are critical, have
     /// lasted at least five minutes, and come with something to do.
+    public static func shouldNotify(_ story: Story) -> Bool {
+        story.isProblem && shouldNotify(story.headline)
+    }
+
     public static func shouldNotify(_ c: DiagnosisContext) -> Bool {
         c.diagnosis.tier == .problem
             && c.diagnosis.severity == .critical

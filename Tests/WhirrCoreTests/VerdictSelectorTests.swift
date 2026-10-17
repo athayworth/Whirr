@@ -108,4 +108,34 @@ final class VerdictSelectorTests: XCTestCase {
         XCTAssertEqual(dipped.headline?.diagnosis.title, "memory")
         XCTAssertEqual(peaked.headline?.diagnosis.title, "memory")
     }
+
+    // MARK: Stories
+
+    private func culprit(_ title: String, _ sev: Severity, _ who: String, seconds: Int = 600) -> DiagnosisContext {
+        DiagnosisContext(diagnosis: Diagnosis(title: title, detail: "", severity: sev, culprits: [who]),
+                         firstSeenAt: Date(timeIntervalSince1970: 0), durationSeconds: seconds, trend: .stable, peakSeverity: sev)
+    }
+
+    func testHiddenHeadlineHandsOverToAVisibleMember() {
+        let v = select([culprit("Big", .critical, "X"), culprit("Small", .warning, "X")], hidden: ["Big"])
+        XCTAssertEqual(v.headline?.diagnosis.title, "Small")
+        XCTAssertEqual(v.stories.count, 1)
+    }
+
+    func testStoryGoneOnlyWhenEveryMemberIsHidden() {
+        XCTAssertTrue(select([culprit("Big", .critical, "X"), culprit("Small", .warning, "X")],
+                             hidden: ["Big", "Small"]).stories.isEmpty)
+    }
+
+    func testVerdictCarriesTheSentence() {
+        let v = select([ctx(DiagnosisTitles.overloaded, .critical)])
+        XCTAssertEqual(v.sentence, "Your Mac is overloaded.")
+        XCTAssertNil(select([]).sentence)
+    }
+
+    func testNotifyPerStory() {
+        let act = SuggestedAction(label: "x", kind: .stopDocker)
+        let story = StoryBuilder.build([ctx("A", .critical, seconds: 300, action: act)], load: .empty)[0]
+        XCTAssertTrue(VerdictSelector.shouldNotify(story))
+    }
 }
