@@ -11,9 +11,11 @@ public struct MinuteAggregate: Codable, Sendable, Equatable {
     public let band: String?
     public let rssi: Int?
     public let noise: Int?
+    /// Channel width. nil in history written before Whirr recorded it.
+    public let widthMHz: Int?
 
     public init(minute: Date, networkId: String, gateway: HopStats, internet: HopStats,
-                channel: Int?, band: String?, rssi: Int?, noise: Int?) {
+                channel: Int?, band: String?, rssi: Int?, noise: Int?, widthMHz: Int? = nil) {
         self.minute = minute
         self.networkId = networkId
         self.gateway = gateway
@@ -22,6 +24,7 @@ public struct MinuteAggregate: Codable, Sendable, Equatable {
         self.band = band
         self.rssi = rssi
         self.noise = noise
+        self.widthMHz = widthMHz
     }
 }
 

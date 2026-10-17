@@ -145,6 +145,9 @@ public actor ConnectionMonitor {
     public func pingRound(at now: Date) async {
         guard !paused else { return }
         refreshGateway()
+        // The link as of the previous round belongs to the minute that
+        // round closed — recorded with that minute, not with this one.
+        let linkDuringLastRound = lastLink
         lastLink = wifi.currentLink()
 
         let gatewayIP = gateway?.ip
@@ -185,7 +188,7 @@ public actor ConnectionMonitor {
             pendingSamples.removeAll()
         }
 
-        writeMinuteAggregateIfDue(now: now, networkId: id)
+        writeMinuteAggregateIfDue(now: now, networkId: id, link: linkDuringLastRound)
         lastRoundAt = now
     }
 
@@ -235,7 +238,7 @@ public actor ConnectionMonitor {
         }
     }
 
-    private func writeMinuteAggregateIfDue(now: Date, networkId: String) {
+    private func writeMinuteAggregateIfDue(now: Date, networkId: String, link: WiFiLink?) {
         let minute = Date(timeIntervalSince1970: (now.timeIntervalSince1970 / 60).rounded(.down) * 60)
         defer { currentMinute = minute }
         guard let previous = currentMinute, previous != minute, let lastRoundAt else { return }
@@ -244,10 +247,11 @@ public actor ConnectionMonitor {
             networkId: networkId,
             gateway: stats.stats(hop: .gateway, window: 60, now: lastRoundAt),
             internet: stats.stats(hop: .internet, window: 60, now: lastRoundAt),
-            channel: lastLink?.channel,
-            band: lastLink?.band,
-            rssi: lastLink?.rssi,
-            noise: lastLink?.noise
+            channel: link?.channel,
+            band: link?.band,
+            rssi: link?.rssi,
+            noise: link?.noise,
+            widthMHz: link?.widthMHz
         ))
     }
 }

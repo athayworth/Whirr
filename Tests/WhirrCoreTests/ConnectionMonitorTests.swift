@@ -139,6 +139,19 @@ final class ConnectionMonitorTests: XCTestCase {
         XCTAssertEqual(aggs.first?.channel, 36)
     }
 
+    func testMinuteAggregateRecordsTheLinkSeenDuringThatMinute() async {
+        let p = FakePinger(); p.set("192.168.1.1", 3); p.set("1.1.1.1", 30)
+        let wifi = FakeWiFi()
+        let m = monitor(p, wifi: wifi)
+        await rounds(m, 30)  // 0–58 s on channel 36 (t0 is minute-aligned)
+        wifi.link = WiFiLink(rssi: -55, noise: -90, channel: 157, band: "5 GHz", widthMHz: 40, txRateMbps: 600, phyMode: "802.11ax")
+        await rounds(m, 1, from: 60)  // first round of the next minute writes minute 0
+        let first = ConnectionHistoryStore(directory: dir).aggregates(since: .distantPast).first
+        XCTAssertEqual(first?.channel, 36)
+        XCTAssertEqual(first?.widthMHz, 80)
+        XCTAssertEqual(first?.rssi, -60)
+    }
+
     // MARK: Review fixes
 
     func testWifiDropOnWifiMacIsWifiDisconnectedNotWired() {
