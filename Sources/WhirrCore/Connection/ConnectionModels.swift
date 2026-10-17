@@ -47,6 +47,17 @@ public struct WiFiLink: Codable, Sendable, Equatable {
     /// background hiss. Below ~20 dB, connections get unreliable.
     public var snr: Int { rssi - noise }
 
+    public enum Quality: Sendable, Equatable { case strong, ok, weak }
+
+    /// Uses the same "weak" line as the weak-signal finding, so the
+    /// Overview tile and the findings never disagree.
+    public var quality: Quality {
+        let config = ConnectionRuleConfig()
+        if rssi < config.weakRssi || snr < config.weakSnr { return .weak }
+        if rssi >= -60 && snr >= 25 { return .strong }
+        return .ok
+    }
+
     /// Human band label. CoreWLAN reports the band directly; the channel
     /// number fallback covers interfaces that don't.
     public static func bandName(channel: Int, rawBand: String?) -> String {

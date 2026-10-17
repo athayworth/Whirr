@@ -30,7 +30,7 @@ public struct SuggestedAction: Hashable, Codable, Sendable {
     /// itself (router settings, talking to the ISP).
     public enum HowTo: String, Hashable, Codable, Sendable {
         case changeWiFiChannel, talkToISP, improveSignal, freeDiskSpace
-        case reinstallSampler, routerOutage, ispOutage, connectionDown
+        case reinstallSampler, routerOutage, ispOutage, connectionDown, wifiDropped
     }
 
     public let label: String

@@ -176,7 +176,7 @@ struct StatusDot: View {
 enum ConnectionText {
     static func summary(_ c: ConnectionSnapshot) -> String {
         if let outage = c.currentOutage {
-            return outage.cause == .isp ? "Internet line is down (router is fine)." : "Router isn't responding."
+            return outage.cause.summary
         }
         if c.paused { return "Background checks paused." }
         guard c.internet1m.count > 0 else { return "Checking…" }
@@ -192,9 +192,11 @@ enum ConnectionText {
     }
 
     static func signalWord(_ link: WiFiLink) -> String {
-        if link.rssi >= -60 && link.snr >= 25 { return "Strong" }
-        if link.rssi >= -70 && link.snr >= 20 { return "OK" }
-        return "Weak"
+        switch link.quality {
+        case .strong: return "Strong"
+        case .ok: return "OK"
+        case .weak: return "Weak"
+        }
     }
 
     static func ms(_ value: Double) -> String { String(format: "%.0f ms", value) }

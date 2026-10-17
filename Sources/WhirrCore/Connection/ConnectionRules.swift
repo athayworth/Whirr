@@ -74,12 +74,12 @@ struct SpikyWiFiRule: Rule {
         return Diagnosis(
             title: ConnectionTitles.spikyWiFi,
             detail: String(
-                format: "In the last 10 minutes, the Wi-Fi link between your Mac and your router stalled %d times (%.0f%% of checks lost). That's what makes games and video calls stutter. A crowded Wi-Fi channel is the usual cause.",
+                format: "In the last 10 minutes, the Wi-Fi link between your Mac and your router stalled %d times (%.0f%% of checks lost). Stalls like these make games and video calls stutter. Common causes are a crowded channel or a weak signal; the connection test shows which applies here.",
                 g.spikes, g.lossPercent
             ),
             severity: critical ? .critical : .warning,
             area: .connection,
-            action: SuggestedAction(label: "How to change your Wi-Fi channel", kind: .showHowTo(.changeWiFiChannel))
+            action: SuggestedAction(label: "Check my connection", kind: .runConnectionTest)
         )
     }
 }
@@ -101,12 +101,12 @@ struct PastRouterRule: Rule {
         return Diagnosis(
             title: ConnectionTitles.pastRouter,
             detail: String(
-                format: "Your Mac's connection to the router is clean, but the connection beyond it stalled %d times in the last 10 minutes (%.0f%% of checks lost). That points to your internet provider or the building's line, not your Wi-Fi.",
+                format: "Your Mac's connection to the router is clean, but the connection beyond it stalled %d times in the last 10 minutes (%.0f%% of checks lost). Possible causes: heavy uploads or downloads on your network (backups, cloud sync, other devices), the router or modem, or your internet provider.",
                 i.spikes, i.lossPercent
             ),
             severity: critical ? .critical : .warning,
             area: .connection,
-            action: SuggestedAction(label: "What to tell your provider", kind: .showHowTo(.talkToISP))
+            action: SuggestedAction(label: "What to check", kind: .showHowTo(.talkToISP))
         )
     }
 }
@@ -123,7 +123,7 @@ struct WeakSignalRule: Rule {
         guard link.rssi < config.weakRssi || link.snr < config.weakSnr else { return nil }
         return Diagnosis(
             title: ConnectionTitles.weakSignal,
-            detail: "Your Wi-Fi signal is \(link.rssi) dBm, \(link.snr) dB above the background noise. Below about \(config.weakRssi) dBm or \(config.weakSnr) dB, connections slow down and drop.",
+            detail: "Your Wi-Fi signal is \(link.rssi) dBm, \(link.snr) dB above the background noise. Below about \(config.weakRssi) dBm or \(config.weakSnr) dB, connections can slow down and drop.",
             severity: .warning,
             area: .connection,
             action: SuggestedAction(label: "Ways to improve the signal", kind: .showHowTo(.improveSignal))
@@ -148,7 +148,7 @@ struct OutageRule: Rule {
             howTo = .ispOutage
         case .wifiDisconnected:
             detail = "Your Mac lost its Wi-Fi connection."
-            howTo = .routerOutage
+            howTo = .wifiDropped
         case .unknown:
             detail = "Nothing beyond your Mac is reachable. Your router doesn't answer Whirr's checks, so Whirr can't tell whether the router or the internet line is at fault."
             howTo = .connectionDown

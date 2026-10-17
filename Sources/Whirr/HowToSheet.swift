@@ -58,23 +58,24 @@ struct HowToContent {
         case .changeWiFiChannel:
             return HowToContent(
                 title: "Change your router's Wi-Fi channel",
-                intro: "Neighbors' Wi-Fi on the same channel takes turns with yours. Moving to a quieter channel is free and takes five minutes.",
+                intro: "Wi-Fi networks on the same stretch of airwaves take turns talking. If the connection test showed your Wi-Fi having trouble and your stretch is crowded, moving to a quieter one can help.",
                 steps: [
-                    "Open your internet provider's app (for example the Optimum app) and find the router or Wi-Fi settings. Or, on a device on your home Wi-Fi, visit \(router) in a web browser.",
-                    "Find the 5 GHz Wi-Fi settings — often under Wi-Fi, Wireless, or Advanced.",
-                    "Change Channel from Automatic to a specific channel. Run Connection → Check my connection to see which channel is least crowded.",
+                    "Open your internet provider's app or website (for example the Optimum app, or optimum.net → My network) and find the router or Wi-Fi settings. Or, on a device on your home Wi-Fi, visit \(router) in a web browser.",
+                    "Find the 5 GHz channel setting — often under Wi-Fi, Wireless, or Advanced. Automatic mode may be called \"Select best channel automatically\" or Smart WiFi.",
+                    "Choose a channel the connection test listed as quiet. Go by stretch, not just number: at 80 MHz, channel 40 shares the airwaves of channels 36–48.",
                     "Save. Devices reconnect on their own within a minute."
                 ],
-                note: "Routers set to Automatic pick a new channel every time they restart, so unplugging the router can move you onto a crowded channel. Setting it manually keeps it. Whirr remembers which channel you were on, so after a few evenings the Connection section shows how each one performed."
+                note: "Automatic modes can change channel on their own, especially after a restart. Whirr logs every change it sees (Connection → Channel changes) and compares how each stretch has done over several evenings, so you can tell whether a manual choice is actually better."
             )
         case .talkToISP:
             return HowToContent(
-                title: "What to tell your internet provider",
-                intro: "Whirr found that your Wi-Fi to the router is fine, but the connection beyond it isn't. That's the provider's side.",
+                title: "Stalls beyond your router: what to check",
+                intro: "Your Mac's link to the router was clean, but the connection beyond it stalled. That can come from your own network being busy, from the router or modem, or from your provider.",
                 steps: [
-                    "Contact your provider and say: \"My home Wi-Fi is fine, but the connection beyond my router keeps stalling and dropping.\"",
-                    "Give them dates and times. In Whirr, open Connection and use Copy summary for your provider under Outages.",
-                    "Ask them to check the signal levels on your line and whether your modem or gateway needs replacing — replacements are usually free."
+                    "Check whether anything is uploading or downloading heavily — backups (Time Machine, Backblaze), cloud sync, game updates, or someone else streaming. If the stalls stop when those pause, that was the cause.",
+                    "If they keep happening while nothing else is busy, restart the router once: unplug it for 30 seconds and give it three minutes to come back.",
+                    "If they still continue, contact your provider: \"The connection beyond my router keeps stalling, even when nothing else is using it.\" Give them dates and times — in Whirr, Connection → Outages → Copy summary for your provider.",
+                    "Ask them to check the signal levels on your line and whether your gateway needs replacing."
                 ],
                 note: nil
             )
@@ -131,6 +132,16 @@ struct HowToContent {
                     "Check whether other devices at home are also offline. If only this Mac is, turn Wi-Fi off and on.",
                     "Check your provider's app or website for a reported outage in your area.",
                     "If there's no reported outage, unplug the router for 30 seconds, plug it back in, and wait two to three minutes."
+                ],
+                note: "Whirr logs when this starts and ends, in Connection → Outages."
+            )
+        case .wifiDropped:
+            return HowToContent(
+                title: "Your Wi-Fi disconnected",
+                intro: "This Mac lost its Wi-Fi connection. From here, Whirr can't tell whether the router stopped broadcasting or only this Mac dropped off.",
+                steps: [
+                    "Check whether other devices at home are still online. If they are, the problem is on this Mac: turn Wi-Fi off and on from the menu bar.",
+                    "If everything is offline, the router may be restarting. Give it two to three minutes, then restart it if it doesn't come back."
                 ],
                 note: "Whirr logs when this starts and ends, in Connection → Outages."
             )

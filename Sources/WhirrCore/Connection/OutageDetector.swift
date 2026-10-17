@@ -102,3 +102,16 @@ public struct OutageDetector: Sendable {
         }
     }
 }
+
+extension OutageCause {
+    /// One line for the Overview tile and the Connection header. Each
+    /// cause says only what was observed.
+    public var summary: String {
+        switch self {
+        case .router: return "Router isn't responding."
+        case .isp: return "Internet line is down (router is fine)."
+        case .wifiDisconnected: return "Wi-Fi disconnected."
+        case .unknown: return "Connection is down."
+        }
+    }
+}

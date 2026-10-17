@@ -39,7 +39,10 @@ final class ConnectionRulesTests: XCTestCase {
         let warn = find(ConnectionTitles.spikyWiFi, snap(gateway: hop(spikes: 6)))
         XCTAssertEqual(warn?.severity, .warning)
         XCTAssertEqual(warn?.area, .connection)
-        XCTAssertEqual(warn?.action?.kind, .showHowTo(.changeWiFiChannel))
+        // No evidence yet that the channel is the cause: offer the test
+        // that finds out, not a channel change.
+        XCTAssertEqual(warn?.action?.kind, .runConnectionTest)
+        XCTAssertFalse(warn?.detail.contains("usual cause") ?? true)
         XCTAssertEqual(find(ConnectionTitles.spikyWiFi, snap(gateway: hop(loss: 2)))?.severity, .warning)
         XCTAssertEqual(find(ConnectionTitles.spikyWiFi, snap(gateway: hop(spikes: 20)))?.severity, .critical)
         XCTAssertEqual(find(ConnectionTitles.spikyWiFi, snap(gateway: hop(loss: 5)))?.severity, .critical)
@@ -57,6 +60,10 @@ final class ConnectionRulesTests: XCTestCase {
         let fires = find(ConnectionTitles.pastRouter, snap(gateway: hop(spikes: 1), internet: hop(spikes: 8)))
         XCTAssertEqual(fires?.severity, .warning)
         XCTAssertEqual(fires?.action?.kind, .showHowTo(.talkToISP))
+        // Clean router + stalls beyond is also what your own uploads look
+        // like, so the provider is one possibility, not the verdict.
+        XCTAssertTrue(fires?.detail.contains("Possible causes") ?? false, fires?.detail ?? "")
+        XCTAssertFalse(fires?.detail.contains("not your Wi-Fi") ?? true)
         XCTAssertNil(find(ConnectionTitles.pastRouter, snap(gateway: hop(spikes: 8), internet: hop(spikes: 8))))
         XCTAssertNil(find(ConnectionTitles.pastRouter, snap(gateway: hop(), internet: hop(), pingable: false)))
         XCTAssertEqual(find(ConnectionTitles.pastRouter, snap(internet: hop(loss: 6)))?.severity, .critical)
@@ -100,5 +107,35 @@ final class ConnectionRulesTests: XCTestCase {
         let d = find(ConnectionTitles.outage, snap(outage: OutageRecord(start: Date(), cause: .unknown, networkId: "home")))
         XCTAssertEqual(d?.action?.kind, .showHowTo(.connectionDown))
         XCTAssertFalse(d?.detail.contains("router is fine") ?? true)
+    }
+
+    func testWiFiDroppedOutageGetsItsOwnHelpNotRouterRestart() {
+        let d = find(ConnectionTitles.outage, snap(outage: OutageRecord(start: Date(), cause: .wifiDisconnected, networkId: "home")))
+        XCTAssertEqual(d?.action?.kind, .showHowTo(.wifiDropped))
+    }
+
+    func testWeakSignalWordingIsHedged() {
+        let weak = WiFiLink(rssi: -75, noise: -100, channel: 36, band: "5 GHz", widthMHz: 80, txRateMbps: 100, phyMode: "802.11ax")
+        let d = find(ConnectionTitles.weakSignal, snap(link: .some(weak)))
+        XCTAssertTrue(d?.detail.contains("can slow down") ?? false, d?.detail ?? "")
+    }
+
+    func testSignalQualityAgreesWithTheWeakSignalRule() {
+        func link(_ rssi: Int, _ noise: Int) -> WiFiLink {
+            WiFiLink(rssi: rssi, noise: noise, channel: 36, band: "5 GHz", widthMHz: 80, txRateMbps: 100, phyMode: "802.11ax")
+        }
+        for l in [link(-71, -95), link(-72, -95), link(-73, -95), link(-65, -84), link(-65, -85), link(-55, -90)] {
+            let ruleSaysWeak = find(ConnectionTitles.weakSignal, snap(link: .some(l))) != nil
+            XCTAssertEqual(l.quality == .weak, ruleSaysWeak, "rssi \(l.rssi) snr \(l.snr)")
+        }
+        XCTAssertEqual(link(-55, -90).quality, .strong)
+        XCTAssertEqual(link(-65, -90).quality, .ok)
+    }
+
+    func testOutageSummaryNamesEachCauseHonestly() {
+        XCTAssertEqual(OutageCause.router.summary, "Router isn't responding.")
+        XCTAssertEqual(OutageCause.isp.summary, "Internet line is down (router is fine).")
+        XCTAssertEqual(OutageCause.wifiDisconnected.summary, "Wi-Fi disconnected.")
+        XCTAssertEqual(OutageCause.unknown.summary, "Connection is down.")
     }
 }
