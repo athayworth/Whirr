@@ -86,6 +86,9 @@ public actor SamplingPipeline {
     static let daemonSecondsPerSample: Double = 3
     /// In-app sampling runs at the user's interval; measured, not assumed.
     private var lastInProcessTickAt: Date?
+    /// Recent gaps between in-app ticks; the median ignores one-off long
+    /// gaps (sleep, App Nap) that aren't the sampling interval.
+    private var recentGaps: [TimeInterval] = []
     private let harbrConfigReader: HarbrConfigReader
     /// Persisted log of closed incidents — read by the Insights charts
     /// in Settings. Written on rising-edge → falling-edge transitions
@@ -142,11 +145,16 @@ public actor SamplingPipeline {
         )
         if let fromDaemon {
             lastInProcessTickAt = nil
+            recentGaps.removeAll()
             return fromDaemon
         }
         let now = clock()
-        let secondsPerSample = lastInProcessTickAt.map { min(60, max(1, now.timeIntervalSince($0))) }
-            ?? Self.daemonSecondsPerSample
+        if let last = lastInProcessTickAt {
+            recentGaps.append(min(60, max(1, now.timeIntervalSince(last))))
+            if recentGaps.count > 15 { recentGaps.removeFirst() }
+        }
+        let sortedGaps = recentGaps.sorted()
+        let secondsPerSample = sortedGaps.isEmpty ? Self.daemonSecondsPerSample : sortedGaps[sortedGaps.count / 2]
         lastInProcessTickAt = now
         let snapshot = sampleSystem()
         let processes = processSampler.sample()

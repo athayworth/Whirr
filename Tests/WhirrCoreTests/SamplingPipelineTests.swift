@@ -200,3 +200,30 @@ extension SamplingPipelineTests {
         XCTAssertFalse(result.diagnoses.contains { $0.title == "Memory is saturated" })
     }
 }
+
+// MARK: - Real sample timing
+
+final class ClockBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _now: Date
+    init(_ now: Date) { _now = now }
+    var now: Date {
+        get { lock.withLock { _now } }
+        set { lock.withLock { _now = newValue } }
+    }
+}
+
+extension SamplingPipelineTests {
+    func testOneLongGapAfterSleepDoesNotInflateDurations() async {
+        // In-app sampling every 3 s, then one 60 s gap (wake from sleep).
+        let clock = ClockBox(Date(timeIntervalSince1970: 1_800_000_000))
+        let pipeline = SamplingPipeline(snapshotPath: snapshotPath, historyPath: historyPath,
+                                        clock: { clock.now }, systemSample: { Self.local(pressure: .normal) })
+        var last: SamplingPipeline.Result?
+        for gap in [3.0, 3, 3, 3, 3, 60] {
+            clock.now = clock.now.addingTimeInterval(gap)
+            last = await pipeline.tick()
+        }
+        XCTAssertEqual(last?.secondsPerSample ?? 0, 3, accuracy: 0.001)
+    }
+}
