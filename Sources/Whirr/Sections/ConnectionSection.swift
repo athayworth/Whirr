@@ -92,7 +92,7 @@ struct ConnectionSection: View {
                 .onChange(of: period) { Task { await reloadHistory() } }
             }
             if let comparison {
-                ChannelComparisonView(comparison: comparison, currentChannel: monitor.connection.link?.channel)
+                ChannelComparisonView(comparison: comparison, current: monitor.connection.link.map(ChannelGroup.init(link:)))
             } else {
                 Text("Collecting…").foregroundStyle(.secondary)
             }
@@ -121,14 +121,14 @@ struct ConnectionSection: View {
     private func reloadHistory() async {
         let store = monitor.connectionStore
         let networkId = monitor.connection.networkId
-        let channel = monitor.connection.link?.channel
+        let current = monitor.connection.link.map(ChannelGroup.init(link:))
         let period = self.period
         let (aggs, outs) = await Task.detached {
             (store.aggregates(since: Date().addingTimeInterval(-ConnectionHistoryStore.retention)), store.outages())
         }.value
         outages = outs.filter { networkId == nil || $0.networkId == networkId }
         comparison = networkId.map {
-            ChannelComparison.compute(aggs, networkId: $0, currentChannel: channel, period: period)
+            ChannelComparison.compute(aggs, networkId: $0, current: current, period: period)
         }
         copied = false
     }
@@ -289,12 +289,12 @@ private struct GradeChip: View {
 
 private struct ChannelComparisonView: View {
     let comparison: ChannelComparison
-    let currentChannel: Int?
+    let current: ChannelGroup?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if comparison.currentChannelWorsened, let currentChannel {
-                Label("Channel \(currentChannel) has gotten worse lately — neighbors may have moved onto it. A connection test shows where everyone is now.",
+            if comparison.currentChannelWorsened, let current {
+                Label("\(current.label) has had more stalls in your last three \(periodNoun(3)) than it did before.",
                       systemImage: "arrow.up.right")
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
@@ -302,31 +302,37 @@ private struct ChannelComparisonView: View {
             if comparison.qualified.isEmpty && comparison.insufficient.isEmpty {
                 Text("No data yet. Whirr builds this up as it watches your connection.").foregroundStyle(.secondary)
             }
-            ForEach(comparison.qualified, id: \.channel) { stat in
+            ForEach(comparison.qualified, id: \.group) { stat in
                 HStack {
-                    Text("Channel \(stat.channel)").font(.headline)
-                    if stat.channel == currentChannel {
-                        Text("current").font(.caption2).padding(.horizontal, 6).background(.quaternary, in: Capsule())
-                    }
+                    groupTitle(stat.group)
                     Spacer()
                     Text(String(format: "%.0f stalls/hour", stat.spikesPerHour)).monospacedDigit()
-                    Text("over \(stat.sessions) \(comparison.period == .evening ? "evenings" : "days")")
-                        .foregroundStyle(.secondary)
+                    Text("over \(stat.sessions) \(periodNoun(stat.sessions))").foregroundStyle(.secondary)
                 }
             }
-            ForEach(comparison.insufficient, id: \.channel) { need in
+            ForEach(comparison.insufficient, id: \.group) { need in
                 HStack {
-                    Text("Channel \(need.channel)").font(.headline)
-                    if need.channel == currentChannel {
-                        Text("current").font(.caption2).padding(.horizontal, 6).background(.quaternary, in: Capsule())
-                    }
+                    groupTitle(need.group)
                     Spacer()
-                    Text("Not enough data yet — \(need.sessionsNeeded) more \(comparison.period == .evening ? (need.sessionsNeeded == 1 ? "evening" : "evenings") : (need.sessionsNeeded == 1 ? "day" : "days"))")
+                    Text("Not enough data yet — \(need.sessionsNeeded) more \(periodNoun(need.sessionsNeeded))")
                         .foregroundStyle(.secondary)
                 }
             }
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.background.secondary))
+    }
+
+    private func groupTitle(_ group: ChannelGroup) -> some View {
+        HStack(spacing: 6) {
+            Text(group.label).font(.headline)
+            if group == current {
+                Text("current").font(.caption2).padding(.horizontal, 6).background(.quaternary, in: Capsule())
+            }
+        }
+    }
+
+    private func periodNoun(_ n: Int) -> String {
+        comparison.period == .evening ? (n == 1 ? "evening" : "evenings") : (n == 1 ? "day" : "days")
     }
 }
