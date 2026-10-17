@@ -53,7 +53,7 @@ final class RulesConfigStoreTests: XCTestCase {
         // Defaults preserved for missing keys.
         XCTAssertEqual(loaded.swapThrashing.criticalGB, 6.0)
         XCTAssertTrue(loaded.swapThrashing.enabled)
-        XCTAssertEqual(loaded.lowDiskSpace.warningPercentUsed, 85)
+        XCTAssertEqual(loaded.lowDiskSpace.warningFreeGB, 30)
     }
 
     func testMalformedJSONFallsBackToDefaults() throws {

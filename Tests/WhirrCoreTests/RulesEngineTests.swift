@@ -292,8 +292,14 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertTrue(diag?.detail.contains("reading") ?? false)
     }
 
-    func testHighDiskIOCriticalFiresAt900MBps() {
+    func testHighDiskIOAt900MBpsIsOnlyAWarningOnModernSSDs() {
         let proc = process(name: "ffmpeg", writeBps: 900 * .mb)
+        let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
+        XCTAssertEqual(result.first { $0.title == "Disk is busy" }?.severity, .warning)
+    }
+
+    func testHighDiskIOCriticalFiresAt3GBps() {
+        let proc = process(name: "ffmpeg", writeBps: 3000 * .mb)
         let result = engine.evaluate(snapshot: snapshot(), processes: [proc])
         let diag = result.first { $0.title == "Disk is busy" }
         XCTAssertEqual(diag?.severity, .critical)
@@ -322,24 +328,31 @@ final class RulesEngineTests: XCTestCase {
 
     // MARK: - LowDiskSpaceRule
 
-    func testLowDiskSpaceFiresAt90PercentFull() {
-        // 90% used = 100 GB free of 1000 GB total.
+    func testLowDiskSpaceWarnsUnderThirtyGBFree() {
         let result = engine.evaluate(
-            snapshot: snapshot(diskFree: 100 * .gb, diskTotal: 1000 * .gb),
+            snapshot: snapshot(diskFree: 25 * .gb, diskTotal: 1000 * .gb),
             processes: []
         )
         let disk = result.first { $0.title == "Disk is nearly full" }
         XCTAssertEqual(disk?.severity, .warning)
-        XCTAssertTrue(disk?.detail.contains("90%") ?? false)
+        XCTAssertTrue(disk?.detail.contains("25.0 GB") ?? false, disk?.detail ?? "")
     }
 
-    func testLowDiskSpaceCriticalAt96PercentFull() {
+    func testLowDiskSpaceCriticalUnderTenGBFree() {
         let result = engine.evaluate(
-            snapshot: snapshot(diskFree: 40 * .gb, diskTotal: 1000 * .gb),
+            snapshot: snapshot(diskFree: 8 * .gb, diskTotal: 1000 * .gb),
             processes: []
         )
-        let disk = result.first { $0.title == "Disk is nearly full" }
-        XCTAssertEqual(disk?.severity, .critical)
+        XCTAssertEqual(result.first { $0.title == "Disk is nearly full" }?.severity, .critical)
+    }
+
+    func testAPercentageAloneIsNotLowDiskOnABigDrive() {
+        // 95% of 2 TB still leaves 100 GB — plenty.
+        let result = engine.evaluate(
+            snapshot: snapshot(diskFree: 100 * .gb, diskTotal: 2000 * .gb),
+            processes: []
+        )
+        XCTAssertNil(result.first { $0.title == "Disk is nearly full" })
     }
 
     func testLowDiskSpaceDoesNotFireWhenPlentyFree() {

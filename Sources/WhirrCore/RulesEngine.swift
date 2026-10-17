@@ -427,20 +427,18 @@ struct LowDiskSpaceRule: Rule {
     let config: LowDiskSpaceRuleConfig
     var isEnabled: Bool { config.enabled }
 
-    /// macOS does several costly things as free space drops — APFS metadata
-    /// thrash, virtual memory eviction churn, Spotlight reindex deferral.
-    /// Above ~85% used everything starts to feel sluggish; above ~95% the
-    /// system actively struggles.
+    /// Judged on free space (including space macOS can purge on demand),
+    /// the measure that actually limits swap, updates and caches.
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
-        let percentUsed = ctx.snapshot.rootDiskPercentUsed
-        guard percentUsed >= config.warningPercentUsed else { return nil }
+        guard ctx.snapshot.rootDiskTotalBytes > 0 else { return nil }
         let freeGB = Double(ctx.snapshot.rootDiskFreeBytes) / 1_073_741_824
-        let severity: Severity = percentUsed >= config.criticalPercentUsed ? .critical : .warning
+        guard freeGB < config.warningFreeGB else { return nil }
+        let severity: Severity = freeGB < config.criticalFreeGB ? .critical : .warning
         return Diagnosis(
             title: DiagnosisTitles.lowDisk,
             detail: String(
-                format: "Boot volume is %.0f%% full (%.1f GB free). macOS slows down as free space drops — clearing space speeds things up.",
-                percentUsed, freeGB
+                format: "Only %.1f GB free on your startup disk (%.0f%% full). macOS needs free space for memory swap, updates and caches; below about %.0f GB it can slow down or fail to update.",
+                freeGB, ctx.snapshot.rootDiskPercentUsed, config.warningFreeGB
             ),
             severity: severity
         )

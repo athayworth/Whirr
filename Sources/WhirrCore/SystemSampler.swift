@@ -90,13 +90,18 @@ public final class SystemSampler: @unchecked Sendable {
         }
     }
 
+    /// Free space as Finder reports it — including space macOS can purge
+    /// on demand (caches, local snapshots) — falling back to statfs.
     private static func rootDiskUsage() -> (free: UInt64, total: UInt64) {
         var stats = statfs()
         guard "/".withCString({ statfs($0, &stats) }) == 0 else { return (0, 0) }
         let blockSize = UInt64(stats.f_bsize)
-        let free = UInt64(stats.f_bavail) &* blockSize
         let total = UInt64(stats.f_blocks) &* blockSize
-        return (free, total)
+        let values = try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        if let important = values?.volumeAvailableCapacityForImportantUsage, important > 0 {
+            return (UInt64(important), total)
+        }
+        return (UInt64(stats.f_bavail) &* blockSize, total)
     }
 
     private static func vmStatistics() -> vm_statistics64_data_t {

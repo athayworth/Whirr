@@ -223,12 +223,13 @@ public struct HighDiskIORuleConfig: Codable, Sendable, Equatable {
     /// warning threshold (~1% utilization on such a drive) fired
     /// constantly on any active build/checkout and taught users to
     /// ignore the diagnosis. 200 MB/s is where sustained I/O actually
-    /// starts to compete with the compressed-memory read path; 800 MB/s
-    /// is genuine bandwidth pressure. Users on older / external
+    /// starts to compete with the compressed-memory read path; 2.5 GB/s
+    /// (a large share of the drive's bandwidth) is genuine pressure — an
+    /// ordinary big file copy runs well past 800 MB/s. Users on older / external
     /// spinning-disk setups can lower these via rules.json.
     public let warningMBs: Double
     public let criticalMBs: Double
-    public init(enabled: Bool = true, warningMBs: Double = 200.0, criticalMBs: Double = 800.0) {
+    public init(enabled: Bool = true, warningMBs: Double = 200.0, criticalMBs: Double = 2500.0) {
         self.enabled = enabled
         self.warningMBs = warningMBs
         self.criticalMBs = criticalMBs
@@ -237,27 +238,29 @@ public struct HighDiskIORuleConfig: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         self.warningMBs = try c.decodeIfPresent(Double.self, forKey: .warningMBs) ?? 200.0
-        self.criticalMBs = try c.decodeIfPresent(Double.self, forKey: .criticalMBs) ?? 800.0
+        self.criticalMBs = try c.decodeIfPresent(Double.self, forKey: .criticalMBs) ?? 2500.0
     }
     private enum CodingKeys: String, CodingKey { case enabled, warningMBs, criticalMBs }
 }
 
 public struct LowDiskSpaceRuleConfig: Codable, Sendable, Equatable {
     public let enabled: Bool
-    public let warningPercentUsed: Double
-    public let criticalPercentUsed: Double
-    public init(enabled: Bool = true, warningPercentUsed: Double = 85, criticalPercentUsed: Double = 95) {
+    /// Free space, not percent used: 95% of a 2 TB drive still leaves
+    /// 100 GB, while 85% of a 256 GB drive is genuinely tight.
+    public let warningFreeGB: Double
+    public let criticalFreeGB: Double
+    public init(enabled: Bool = true, warningFreeGB: Double = 30, criticalFreeGB: Double = 10) {
         self.enabled = enabled
-        self.warningPercentUsed = warningPercentUsed
-        self.criticalPercentUsed = criticalPercentUsed
+        self.warningFreeGB = warningFreeGB
+        self.criticalFreeGB = criticalFreeGB
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
-        self.warningPercentUsed = try c.decodeIfPresent(Double.self, forKey: .warningPercentUsed) ?? 85
-        self.criticalPercentUsed = try c.decodeIfPresent(Double.self, forKey: .criticalPercentUsed) ?? 95
+        self.warningFreeGB = try c.decodeIfPresent(Double.self, forKey: .warningFreeGB) ?? 30
+        self.criticalFreeGB = try c.decodeIfPresent(Double.self, forKey: .criticalFreeGB) ?? 10
     }
-    private enum CodingKeys: String, CodingKey { case enabled, warningPercentUsed, criticalPercentUsed }
+    private enum CodingKeys: String, CodingKey { case enabled, warningFreeGB, criticalFreeGB }
 }
 
 public struct RunawayProcessRuleConfig: Codable, Sendable, Equatable {

@@ -81,18 +81,14 @@ final class RulesEngineConfigTests: XCTestCase {
         XCTAssertTrue(result.contains { $0.title == "Swap is holding old pages" })
     }
 
-    func testLowDiskSpaceWarningRaisedFiresLater() {
-        // User raises warning to 95% — 90% no longer triggers.
+    func testLowDiskSpaceWarningLoweredFiresLater() {
+        // User lowers the warning to 15 GB — 20 GB free no longer triggers.
         let config = RulesConfig(
-            lowDiskSpace: LowDiskSpaceRuleConfig(
-                enabled: true,
-                warningPercentUsed: 95,
-                criticalPercentUsed: 99
-            )
+            lowDiskSpace: LowDiskSpaceRuleConfig(enabled: true, warningFreeGB: 15, criticalFreeGB: 5)
         )
         let engine = RulesEngine(config: config)
         let result = engine.evaluate(
-            snapshot: snapshot(diskFree: 100 * 1_073_741_824, diskTotal: 1000 * 1_073_741_824),
+            snapshot: snapshot(diskFree: 20 * 1_073_741_824, diskTotal: 1000 * 1_073_741_824),
             processes: []
         )
         XCTAssertFalse(result.contains { $0.title == "Disk is nearly full" })
