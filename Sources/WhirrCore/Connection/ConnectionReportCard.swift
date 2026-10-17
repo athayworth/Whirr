@@ -203,7 +203,7 @@ public enum ConnectionReportCard {
         }.joined(separator: "; or ")
         var fix = "Your Wi-Fi had trouble, so if your router lets you choose a channel, pick a quieter stretch: \(list)."
         if options.contains(where: { $0.block.isRadarShared }) {
-            fix += " Channels 52–144 are shared with radar: if the router detects radar it has to move, dropping Wi-Fi for about a minute."
+            fix += " Channels 52–144 are shared with radar: if the router detects radar it has to move, dropping Wi-Fi for a minute or more."
         }
         return fix
     }

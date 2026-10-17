@@ -23,7 +23,7 @@ public struct ChannelBlock: Hashable, Sendable {
 
     /// 5 GHz channels 52–144 are shared with weather and airport radar.
     /// Routers there must move off when they detect radar, which drops
-    /// Wi-Fi for about a minute.
+    /// Wi-Fi for a minute or more.
     public var isRadarShared: Bool {
         band == "5 GHz" && channels.overlaps(52...144)
     }
