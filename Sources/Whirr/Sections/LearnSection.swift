@@ -42,6 +42,8 @@ struct LabelWithInfo: View {
 
 private struct TermExplanation: View {
     let term: Glossary.Term
+    /// Only inside a popover; on the Learn page it would point at itself.
+    var showsLearnHint = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -50,9 +52,11 @@ private struct TermExplanation: View {
             Text(term.detail)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("All terms are in Learn, in the sidebar.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            if showsLearnHint {
+                Text("All terms are in Learn, in the sidebar.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 }
@@ -69,7 +73,7 @@ struct LearnSection: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(group.terms.enumerated()), id: \.element) { index, term in
                         if index > 0 { Divider() }
-                        TermExplanation(term: term)
+                        TermExplanation(term: term, showsLearnHint: false)
                             .padding(14)
                     }
                 }

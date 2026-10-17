@@ -234,13 +234,13 @@ struct MemoryPressureRule: Rule {
         case .critical:
             return Diagnosis(
                 title: "Memory is saturated",
-                detail: "Very little free RAM left. macOS is compressing pages to keep up — apps will stutter.",
+                detail: "macOS reports high memory pressure: it's working hard to find memory for your apps, so they may stutter. Quitting apps you aren't using frees memory fastest.",
                 severity: .critical
             )
         case .warning:
             return Diagnosis(
                 title: "Memory is tight",
-                detail: "Free memory is running low. Quitting unused apps will help.",
+                detail: "macOS reports elevated memory pressure. Quitting apps you aren't using will help.",
                 severity: .warning
             )
         case .normal:
