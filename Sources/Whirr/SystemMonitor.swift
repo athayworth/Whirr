@@ -77,30 +77,10 @@ final class SystemMonitor {
     /// Health of the root sampler's snapshot file this tick.
     var daemonStatus: DaemonStatus = .absent
 
-    // MARK: Connection
+    // MARK: Connection and navigation
 
-    /// Latest passive connection state (pings + Wi-Fi link).
-    var connection: ConnectionSnapshot = .empty
-    /// Non-nil while a "Check my connection" test is running.
-    var connectionTestPhase: ConnectionTestRunner.Phase?
-    /// Most recent completed full test (this session or loaded from disk).
-    var latestConnectionTest: ConnectionTestResult?
-    /// Router IP, for the channel-change how-to ("open http://…").
-    var gatewayIP: String?
-    let connectionStore = ConnectionHistoryStore()
-    private let connectionMonitor: ConnectionMonitor
-    private let connectionTestRunner = ConnectionTestRunner()
-
-    // MARK: Navigation
-
-    /// Current main-window section. Lives here so the menu popover and
-    /// action buttons can jump the window to a section.
-    var selectedSection: SidebarItem? = .overview
-    /// Set by actions that want the Connection section to start a test
-    /// as soon as it appears.
-    var pendingConnectionTest = false
-    /// How-to sheet currently shown over the main window.
-    var presentedHowTo: SuggestedAction.HowTo?
+    let net = ConnectionController()
+    let nav = Navigation()
 
     /// Currently-expanded process row (nil = nothing expanded). Lives on
     /// the monitor rather than as `@State` in MenuBarView so the
@@ -153,10 +133,8 @@ final class SystemMonitor {
         // (writer) and the Insights view (reader) share one instance
         // and see the same in-memory cache.
         self.pipeline = SamplingPipeline(rulesConfig: config, incidentLog: incidentLog)
-        self.connectionMonitor = ConnectionMonitor(store: connectionStore)
-        self.latestConnectionTest = connectionStore.tests().last
         start()
-        startConnectionMonitoring()
+        net.start()
     }
 
     deinit {
@@ -237,13 +215,14 @@ final class SystemMonitor {
                 let recentBundleIds = await MainActor.run {
                     self?.frontmostAppTracker.recordAndSnapshot() ?? []
                 }
-                let connection = await self?.connectionMonitor.snapshot() ?? .empty
+                let passive = await MainActor.run { self?.net.passiveMonitor }
+                let connection = await passive?.snapshot() ?? .empty
                 let result = await pipeline.tick(
                     containers: lastKnownContainers,
                     recentlyActiveBundleIds: recentBundleIds,
                     connection: connection
                 )
-                await MainActor.run { self?.connection = connection }
+                await MainActor.run { self?.net.connection = connection }
                 await MainActor.run {
                     self?.apply(result)
                     self?.dockerContainers = lastKnownContainers
@@ -316,28 +295,6 @@ final class SystemMonitor {
 // MARK: - Connection
 
 extension SystemMonitor {
-    /// Starts the passive watcher and pauses it across sleep, so a closed
-    /// lid never reads as an outage.
-    fileprivate func startConnectionMonitoring() {
-        let monitor = connectionMonitor
-        Task { await monitor.start() }
-        let center = NSWorkspace.shared.notificationCenter
-        center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
-            Task { await monitor.setPaused(true) }
-        }
-        center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
-            Task {
-                // Let Wi-Fi re-associate before judging the connection.
-                try? await Task.sleep(for: .seconds(10))
-                await monitor.setPaused(false)
-            }
-        }
-        Task { [weak self] in
-            let ip = await Task.detached { GatewayResolver.current()?.ip }.value
-            self?.gatewayIP = ip
-        }
-    }
-
     var isDeveloperRelevant: Bool {
         !dockerContainers.isEmpty || !harbrStatuses.isEmpty || Preferences.alwaysShowDeveloper
     }
@@ -353,33 +310,6 @@ extension SystemMonitor {
     /// Snoozed or muted contexts for one area.
     func hiddenContexts(in area: Diagnosis.Area) -> [DiagnosisContext] {
         diagnosisContexts.filter { $0.diagnosis.area == area && isHidden($0.diagnosis.title) }
-    }
-
-    func runConnectionTest() {
-        guard connectionTestPhase == nil else { return }
-        connectionTestPhase = .measuringIdle
-        let runner = connectionTestRunner
-        let store = connectionStore
-        let passive = connectionMonitor
-        // Frozen now, so the saved result is always graded against the
-        // 10 minutes before it — not whatever is happening when viewed.
-        let before = PassiveBefore(gateway: connection.gateway10m, internet: connection.internet10m,
-                                   gatewayPingable: connection.gatewayPingable, isWired: connection.isWired)
-        Task { [weak self] in
-            // The test saturates the line on purpose. Passive pings taken
-            // meanwhile would record self-inflicted stalls into history
-            // and skew the per-channel comparison, so pause them.
-            await passive.setPaused(true)
-            defer { Task { await passive.setPaused(false) } }
-            let result = await runner.run(before: before) { phase in
-                Task { @MainActor in self?.connectionTestPhase = phase == .done ? nil : phase }
-            }
-            store.saveTest(result)
-            await MainActor.run {
-                self?.latestConnectionTest = result
-                self?.connectionTestPhase = nil
-            }
-        }
     }
 
     func stopAllDockerContainers() async {

@@ -34,12 +34,12 @@ struct HistorySectionView: View {
             InsightsView(log: monitor.incidentLog)
                 .padding(.top, 6)
         }
-        .task(id: monitor.connection.networkId) {
+        .task(id: monitor.net.connection.networkId) {
             // Same rule as Connection: another network's outages say
             // nothing about this one, so they aren't mixed in.
-            let network = monitor.connection.networkId
-            outages = monitor.connectionStore.outages().filter { network == nil || $0.networkId == network }
-            tests = monitor.connectionStore.tests().filter { network == nil || $0.networkId == network }
+            let network = monitor.net.connection.networkId
+            outages = monitor.net.store.outages().filter { network == nil || $0.networkId == network }
+            tests = monitor.net.store.tests().filter { network == nil || $0.networkId == network }
         }
     }
 }

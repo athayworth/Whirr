@@ -7,8 +7,9 @@ struct MainWindow: View {
     @Bindable var monitor: SystemMonitor
 
     var body: some View {
+        @Bindable var nav = monitor.nav
         NavigationSplitView {
-            List(selection: $monitor.selectedSection) {
+            List(selection: $nav.selectedSection) {
                 ForEach(visibleItems) { item in
                     HStack {
                         Label(item.title, systemImage: item.symbol)
@@ -22,7 +23,7 @@ struct MainWindow: View {
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 240)
         } detail: {
-            switch monitor.selectedSection ?? .overview {
+            switch monitor.nav.selectedSection ?? .overview {
             case .overview: OverviewSection(monitor: monitor)
             case .mac: MacSection(monitor: monitor)
             case .connection: ConnectionSection(monitor: monitor)
@@ -32,8 +33,8 @@ struct MainWindow: View {
             }
         }
         .frame(minWidth: 760, minHeight: 520)
-        .sheet(item: $monitor.presentedHowTo) { howTo in
-            HowToSheet(howTo: howTo, gatewayIP: monitor.gatewayIP)
+        .sheet(item: $nav.presentedHowTo) { howTo in
+            HowToSheet(howTo: howTo, gatewayIP: monitor.net.gatewayIP)
         }
         // Show in the Dock / Cmd-Tab only while the window is open.
         .onAppear {

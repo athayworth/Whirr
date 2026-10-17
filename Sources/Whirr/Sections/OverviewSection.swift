@@ -13,7 +13,7 @@ struct OverviewSection: View {
                     Text("Also").font(.headline)
                     ForEach(monitor.verdict.also) { context in
                         Button {
-                            monitor.selectedSection = SidebarItem.allCases.first { $0.area == context.diagnosis.area }
+                            monitor.nav.selectedSection = SidebarItem.allCases.first { $0.area == context.diagnosis.area }
                         } label: {
                             HStack {
                                 Image(systemName: context.symbol).foregroundStyle(context.displayTint)
@@ -30,7 +30,7 @@ struct OverviewSection: View {
             }
             HStack(alignment: .top, spacing: 14) {
                 AreaTile(monitor: monitor, item: .mac, line: macLine)
-                AreaTile(monitor: monitor, item: .connection, line: ConnectionText.summary(monitor.connection))
+                AreaTile(monitor: monitor, item: .connection, line: ConnectionText.summary(monitor.net.connection))
             }
         }
     }
@@ -124,7 +124,7 @@ struct AreaTile: View {
 
     var body: some View {
         Button {
-            monitor.selectedSection = item
+            monitor.nav.selectedSection = item
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {

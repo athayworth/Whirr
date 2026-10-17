@@ -43,14 +43,14 @@ extension SystemMonitor {
         case .openURL(let url):
             NSWorkspace.shared.open(url)
         case .openSection(let area):
-            selectedSection = SidebarItem.allCases.first { $0.area == area }
+            nav.selectedSection = SidebarItem.allCases.first { $0.area == area }
             requestMainWindow()
         case .runConnectionTest:
-            selectedSection = .connection
-            pendingConnectionTest = true
+            nav.selectedSection = .connection
+            nav.pendingConnectionTest = true
             requestMainWindow()
         case .showHowTo(let howTo):
-            presentedHowTo = howTo
+            nav.presentedHowTo = howTo
             requestMainWindow()
         }
     }

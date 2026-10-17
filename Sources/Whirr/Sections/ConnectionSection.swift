@@ -17,8 +17,8 @@ struct ConnectionSection: View {
 
     var body: some View {
         SectionPage(title: "Connection") {
-            LinkCard(connection: monitor.connection, testRunning: monitor.connectionTestPhase != nil)
-            HopRows(connection: monitor.connection)
+            LinkCard(connection: monitor.net.connection, testRunning: monitor.net.testPhase != nil)
+            HopRows(connection: monitor.net.connection)
             if let today { TodayCard(summary: today) }
 
             SectionHeader(title: "Findings")
@@ -31,7 +31,7 @@ struct ConnectionSection: View {
         }
         // One reload path, restarted whenever the network or period
         // changes, so a slow load for the old period can't land last.
-        .task(id: ReloadKey(networkId: monitor.connection.networkId, period: period)) {
+        .task(id: ReloadKey(networkId: monitor.net.connection.networkId, period: period)) {
             // History grows a minute at a time; refresh on that cadence.
             while !Task.isCancelled {
                 await reloadHistory()
@@ -39,13 +39,13 @@ struct ConnectionSection: View {
             }
         }
         .onAppear {
-            if monitor.pendingConnectionTest {
-                monitor.pendingConnectionTest = false
+            if monitor.nav.pendingConnectionTest {
+                monitor.nav.pendingConnectionTest = false
                 confirmingTest = true
             }
         }
         .confirmationDialog("Check your connection?", isPresented: $confirmingTest) {
-            Button("Run test") { monitor.runConnectionTest() }
+            Button("Run test") { monitor.net.runTest() }
         } message: {
             Text("Takes about 30 seconds and uses roughly 500 MB of data. Anything else using the internet will be slower while it runs.")
         }
@@ -59,15 +59,15 @@ struct ConnectionSection: View {
                 SectionHeader(title: "Check my connection",
                               subtitle: "Measures speed, delay when busy, and how crowded your Wi-Fi channel is.")
                 Spacer()
-                if let phase = monitor.connectionTestPhase {
+                if let phase = monitor.net.testPhase {
                     ProgressView().controlSize(.small)
                     Text(Self.phaseText(phase)).foregroundStyle(.secondary)
                 } else {
-                    Button(monitor.latestConnectionTest == nil ? "Run test" : "Run again") { confirmingTest = true }
+                    Button(monitor.net.latestTest == nil ? "Run test" : "Run again") { confirmingTest = true }
                         .buttonStyle(.borderedProminent)
                 }
             }
-            if let test = monitor.latestConnectionTest {
+            if let test = monitor.net.latestTest {
                 Text("Last run \(test.at.formatted(.relative(presentation: .named)))")
                     .font(.caption).foregroundStyle(.secondary)
                 VStack(spacing: 8) {
@@ -105,7 +105,7 @@ struct ConnectionSection: View {
                 .fixedSize()
             }
             if let comparison {
-                ChannelComparisonView(comparison: comparison, current: monitor.connection.link.map(ChannelGroup.init(link:)))
+                ChannelComparisonView(comparison: comparison, current: monitor.net.connection.link.map(ChannelGroup.init(link:)))
             } else {
                 Text("Collecting…").foregroundStyle(.secondary)
             }
@@ -165,9 +165,9 @@ struct ConnectionSection: View {
     }
 
     private func reloadHistory() async {
-        let store = monitor.connectionStore
-        let networkId = monitor.connection.networkId
-        let current = monitor.connection.link.map(ChannelGroup.init(link:))
+        let store = monitor.net.store
+        let networkId = monitor.net.connection.networkId
+        let current = monitor.net.connection.link.map(ChannelGroup.init(link:))
         let period = self.period
         let (aggs, outs) = await Task.detached(priority: .utility) {
             (store.aggregates(since: Date().addingTimeInterval(-ConnectionHistoryStore.retention)), store.outages())

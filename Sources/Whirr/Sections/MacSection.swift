@@ -125,7 +125,7 @@ struct MacSection: View {
                     Text("System-process view unavailable").font(.headline)
                     Text("Whirr's background helper is out of date, so system processes (like backups and Spotlight) aren't visible.")
                         .font(.callout).foregroundStyle(.secondary)
-                    Button("How to update it") { monitor.presentedHowTo = .reinstallSampler }
+                    Button("How to update it") { monitor.nav.presentedHowTo = .reinstallSampler }
                         .controlSize(.small)
                 }
             }
