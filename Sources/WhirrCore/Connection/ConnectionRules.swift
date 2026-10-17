@@ -1,7 +1,7 @@
 import Foundation
 
 public enum ConnectionTitles {
-    public static let spikyWiFi = "Wi-Fi is spiky"
+    public static let spikyWiFi = "Your link to the router is stalling"
     public static let pastRouter = "Problem is past your router"
     public static let weakSignal = "Weak Wi-Fi signal"
     public static let outage = "Internet is down"
@@ -74,7 +74,7 @@ struct SpikyWiFiRule: Rule {
         return Diagnosis(
             title: ConnectionTitles.spikyWiFi,
             detail: String(
-                format: "In the last 10 minutes, the Wi-Fi link between your Mac and your router stalled %d times (%.0f%% of checks lost). Stalls like these make games and video calls stutter. Common causes are a crowded channel or a weak signal; the connection test shows which applies here.",
+                format: "In the last 10 minutes, the link between your Mac and your router stalled %d times (%.0f%% of checks lost). Stalls like these make games and video calls stutter. They're inside your home: usually Wi-Fi (a crowded channel or a weak signal), sometimes this Mac or the router. The connection test shows more.",
                 g.spikes, g.lossPercent
             ),
             severity: critical ? .critical : .warning,
@@ -144,7 +144,7 @@ struct OutageRule: Rule {
             detail = "Your router stopped responding. Restarting it usually brings it back. Whirr is logging this so you can tell how often it happens."
             howTo = .routerOutage
         case .isp:
-            detail = "Your router is fine, but nothing beyond it is reachable — the internet line itself is down. Whirr is logging this so you have dates and times to give your provider."
+            detail = "Your router answers, but nothing beyond it does. The break is between your router and the internet: the router's internet connection, the modem, or your provider. Whirr is logging this so you have dates and times."
             howTo = .ispOutage
         case .wifiDisconnected:
             detail = "Your Mac lost its Wi-Fi connection."

@@ -134,7 +134,7 @@ final class ConnectionRulesTests: XCTestCase {
 
     func testOutageSummaryNamesEachCauseHonestly() {
         XCTAssertEqual(OutageCause.router.summary, "Router isn't responding.")
-        XCTAssertEqual(OutageCause.isp.summary, "Internet line is down (router is fine).")
+        XCTAssertEqual(OutageCause.isp.summary, "Internet is down beyond your router (the router answers).")
         XCTAssertEqual(OutageCause.wifiDisconnected.summary, "Wi-Fi disconnected.")
         XCTAssertEqual(OutageCause.unknown.summary, "Connection is down.")
     }

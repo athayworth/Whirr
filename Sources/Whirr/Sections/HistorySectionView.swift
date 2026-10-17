@@ -88,9 +88,9 @@ enum OutageText {
     static func cause(_ c: OutageCause) -> String {
         switch c {
         case .router: return "Router stopped responding"
-        case .isp: return "Internet line down"
+        case .isp: return "Down beyond the router (router answered)"
         case .wifiDisconnected: return "Wi-Fi disconnected"
-        case .unknown: return "Connection down (router not checked)"
+        case .unknown: return "Connection down (cause unclear)"
         }
     }
 
@@ -105,11 +105,11 @@ enum OutageText {
         let lines = recent.map { "• \($0.start.formatted(date: .abbreviated, time: .shortened)) — \(cause($0.cause)), \(duration($0))" }
         let isp = recent.filter { $0.cause == .isp }.count
         return """
-        Connection outages in the last 30 days: \(recent.count) (\(isp) where the router was working but the internet line was down).
+        Connection outages in the last 30 days: \(recent.count) (\(isp) where the home router still answered but nothing beyond it did).
 
         \(lines.joined(separator: "\n"))
 
-        Recorded automatically by Whirr, which pings the home router and an internet server every 2 seconds.
+        Recorded automatically by Whirr, which checks the home router and two internet servers (1.1.1.1 and 8.8.8.8) every 2 seconds.
         """
     }
 }

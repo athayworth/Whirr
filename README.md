@@ -6,7 +6,7 @@
 
 A macOS app that tells you **why** your Mac or your connection feels slow — not just how slow.
 
-Most performance monitors (Stats, iStat Menus, Activity Monitor) show gauges and let you draw your own conclusions. Whirr runs a rules engine over CPU, memory, swap, thermal, per-process activity and your network connection, and surfaces one plain-English answer with one thing to do: *"Backup is competing with your apps — pause it"*, *"Wi-Fi is spiky — run a connection test to see why"*, *"Problem is past your router — here's what to check"*. Whirr only names a cause when its measurements isolate it; otherwise it says what it saw and what it can't tell.
+Most performance monitors (Stats, iStat Menus, Activity Monitor) show gauges and let you draw your own conclusions. Whirr runs a rules engine over CPU, memory, swap, thermal, per-process activity and your network connection, and surfaces one plain-English answer with one thing to do: *"Backup is competing with your apps — pause it"*, *"Your link to the router is stalling — run a connection test to see why"*, *"Problem is past your router — here's what to check"*. Whirr only names a cause when its measurements isolate it; otherwise it says what it saw and what it can't tell.
 
 > Local, privacy-respecting, MIT-licensed, no telemetry. Network use: tiny pings to your router, 1.1.1.1 and 8.8.8.8 every 2 s (about 10 MB/day leaves your home), update checks, and the optional user-started connection test (~500 MB).
 

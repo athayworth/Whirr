@@ -115,7 +115,7 @@ struct ConnectionSection: View {
     private var changesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionHeader(title: "Channel changes",
-                          subtitle: "Every change Whirr saw in the last 30 days. Usually the router switching channel on its own.",
+                          subtitle: "Every change Whirr saw in the last 30 days. A new channel in the same band is usually the router switching on its own; a band change is usually your Mac or router moving between 2.4 and 5 GHz.",
                           term: .autoChannel)
             VStack(alignment: .leading, spacing: 8) {
                 if changes.isEmpty {

@@ -140,7 +140,7 @@ struct HowToContent {
                 title: "Your Wi-Fi disconnected",
                 intro: "This Mac lost its Wi-Fi connection. From here, Whirr can't tell whether the router stopped broadcasting or only this Mac dropped off.",
                 steps: [
-                    "Check whether other devices at home are still online. If they are, the problem is on this Mac: turn Wi-Fi off and on from the menu bar.",
+                    "Check whether other devices at home are still online. If they are, the problem is more likely on this Mac: turn Wi-Fi off and on from the menu bar.",
                     "If everything is offline, the router may be restarting. Give it two to three minutes, then restart it if it doesn't come back."
                 ],
                 note: "Whirr logs when this starts and ends, in Connection → Outages."

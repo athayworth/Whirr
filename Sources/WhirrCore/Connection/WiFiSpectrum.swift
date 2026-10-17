@@ -14,9 +14,11 @@ public struct ChannelBlock: Hashable, Sendable {
     let lowMHz: Int
     let highMHz: Int
 
-    /// "channels 149–161" or "channel 36".
+    /// "channels 149–161", "channel 36", or "channel 6 at 40 MHz" for a
+    /// 2.4 GHz network whose extra 20 MHz could be on either side.
     public var label: String {
-        channels.count > 1
+        if band == "2.4 GHz" && widthMHz >= 40 { return "channel \(channels.lowerBound) at \(widthMHz) MHz" }
+        return channels.count > 1
             ? "channels \(channels.lowerBound)–\(channels.upperBound)"
             : "channel \(channels.lowerBound)"
     }

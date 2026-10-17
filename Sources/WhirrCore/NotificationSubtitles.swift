@@ -16,7 +16,7 @@ public enum NotificationSubtitles {
             return "Force-quit the process if you weren't expecting the work."
         }
         if title.hasSuffix("memory has been growing") {
-            return "Looks like a leak — restarting the app will recover the memory."
+            return "If it keeps growing, restarting the app will free that memory."
         }
 
         switch title {
@@ -26,17 +26,17 @@ public enum NotificationSubtitles {
         case "Memory is tight":
             return "Watch what you add — headroom is low."
         case "System is actively paging":
-            return "Close something — the machine is thrashing swap."
+            return "Closing an app frees memory and stops the paging."
         case "Swap is holding old pages":
-            return "No action needed — swap will drop as you close apps."
+            return "No action needed — it isn't slowing anything right now."
 
         // CPU / load / thermal
         case "System is overloaded":
             return "Too many processes competing for CPU."
         case "CPU is critically hot", "CPU is throttling from heat":
-            return "Check airflow — performance is being held back."
+            return "Keep the vents clear — performance is being held back."
         case "Heavy work while your Mac is hot":
-            return "Improving airflow will recover more than force-quitting."
+            return "Pausing the heavy work lets the Mac cool down."
 
         // Disk
         case "Disk is nearly full":
@@ -44,7 +44,7 @@ public enum NotificationSubtitles {
         case "Disk is busy":
             return "Wait for the I/O to finish or close the process moving data."
         case "Heavy disk use while memory is tight":
-            return "Close the disk-heavy process or free RAM — either breaks the contention."
+            return "Closing the disk-heavy process or freeing memory helps."
 
         // Backup
         case "Backup is using your system",
@@ -53,7 +53,7 @@ public enum NotificationSubtitles {
 
         // Rendering / OS
         case "Graphics is working hard":
-            return "A graphics-heavy app is behind this — close the biggest one."
+            return "If things feel slow, close or relaunch the heaviest graphics app."
         case "Spotlight is indexing":
             return "No action needed — this finishes on its own."
 

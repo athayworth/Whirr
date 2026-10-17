@@ -127,7 +127,7 @@ extension OutageCause {
     public var summary: String {
         switch self {
         case .router: return "Router isn't responding."
-        case .isp: return "Internet line is down (router is fine)."
+        case .isp: return "Internet is down beyond your router (the router answers)."
         case .wifiDisconnected: return "Wi-Fi disconnected."
         case .unknown: return "Connection is down."
         }

@@ -125,15 +125,15 @@ public enum Glossary {
             case .channelWidth:
                 return "Wider is faster, like more lanes, but your network then shares airtime with anyone on any part of that stretch. That's why a network on channel 40 at 80 MHz shares the airwaves of channels 36–48."
             case .radarChannels:
-                return "Routers on these channels must listen for radar and move away if they hear it, which drops Wi-Fi for a minute or more while they switch. Away from airports and weather stations that's rare, which makes these channels a quiet option if your router offers them."
+                return "Routers on these channels must listen for radar and move away if they hear it, which can drop Wi-Fi for a minute or more while they switch. Away from airports and weather stations that's rare, which makes these channels a quiet option if your router offers them."
             case .autoChannel:
                 return "Automatic selection can be helpful, but it can also move your network onto a busy stretch after a restart. Whirr logs every channel change it sees and compares how each stretch has done, so you can judge with evidence."
             case .crowding:
-                return "Only networks heard at \(ConnectionReportCard.loudRssi) dBm or stronger make your router wait its turn; fainter ones barely matter. Without Location permission macOS doesn't tell Whirr network names, so it can't tell which network is yours — and one router can broadcast several. A crowded stretch only matters if your Wi-Fi is actually having trouble."
+                return "Networks your Mac hears at \(ConnectionReportCard.loudRssi) dBm or stronger are loud enough to compete for airtime; fainter ones matter much less. Signal is measured at your Mac, not at the router. Without Location permission macOS doesn't tell Whirr network names, so it can't tell which network is yours — and one router can broadcast several. A crowded stretch only matters if your Wi-Fi is actually having trouble."
             case .linkRate:
                 return "It changes constantly with signal strength and interference. Real-world speed is usually about half of it, or less."
             case .routerHop:
-                return "Whirr checks the router every 2 seconds. That trip never leaves your home, so stalls here point to Wi-Fi, this Mac, or the router itself — not your internet provider."
+                return "Whirr checks the router every 2 seconds. That trip never leaves your home, so stalls here point to Wi-Fi, this Mac, or the router itself — not your internet provider. On a Mac that's usually Wi-Fi."
             case .internetHop:
                 return "This trip includes the router leg. If the router leg is steady but this one stalls, the delay is beyond your router: the line, your provider, or heavy traffic from your own home filling the line. The internet only counts as down when both public hosts stop answering."
             case .delay:
