@@ -29,6 +29,8 @@ public actor SamplingPipeline {
         public let harbrStatuses: [HarbrProjectStatus]
         public let source: Source
         public let daemonStatus: DaemonStatus
+        /// Real time between process samples (see CoreContext).
+        public let secondsPerSample: Double
 
         public enum Source: Sendable { case daemon, inProcess }
 
@@ -43,8 +45,10 @@ public actor SamplingPipeline {
             history: [TrendPoint],
             harbrStatuses: [HarbrProjectStatus],
             source: Source,
-            daemonStatus: DaemonStatus = .absent
+            daemonStatus: DaemonStatus = .absent,
+            secondsPerSample: Double = 3
         ) {
+            self.secondsPerSample = secondsPerSample
             self.snapshot = snapshot
             self.processes = processes
             self.diagnosisContexts = diagnosisContexts
@@ -78,6 +82,10 @@ public actor SamplingPipeline {
     private let systemSampler = SystemSampler()
     private let rules: RulesEngine
     private var durationTracker = DiagnosisDurationTracker()
+    /// The daemon samples every 3 s (`--interval 3` in its launchd plist).
+    static let daemonSecondsPerSample: Double = 3
+    /// In-app sampling runs at the user's interval; measured, not assumed.
+    private var lastInProcessTickAt: Date?
     private let harbrConfigReader: HarbrConfigReader
     /// Persisted log of closed incidents — read by the Insights charts
     /// in Settings. Written on rising-edge → falling-edge transitions
@@ -132,7 +140,14 @@ public actor SamplingPipeline {
             recentlyActiveBundleIds: recentlyActiveBundleIds,
             connection: connection
         )
-        if let fromDaemon { return fromDaemon }
+        if let fromDaemon {
+            lastInProcessTickAt = nil
+            return fromDaemon
+        }
+        let now = clock()
+        let secondsPerSample = lastInProcessTickAt.map { min(60, max(1, now.timeIntervalSince($0))) }
+            ?? Self.daemonSecondsPerSample
+        lastInProcessTickAt = now
         let snapshot = sampleSystem()
         let processes = processSampler.sample()
         let diagnoses = rules.evaluate(
@@ -142,7 +157,8 @@ public actor SamplingPipeline {
             describer: { ProcessDescriptor.shared.friendlyName(for: $0) },
             bundleIdentifier: { ProcessDescriptor.shared.bundleIdentifier(for: $0) },
             recentlyActiveBundleIds: recentlyActiveBundleIds,
-            connection: connection
+            connection: connection,
+            secondsPerSample: secondsPerSample
         )
         return buildResult(
             snapshot: snapshot,
@@ -150,7 +166,8 @@ public actor SamplingPipeline {
             diagnoses: diagnoses,
             history: [],
             source: .inProcess,
-            daemonStatus: daemonStatus
+            daemonStatus: daemonStatus,
+            secondsPerSample: secondsPerSample
         )
     }
 
@@ -181,7 +198,8 @@ public actor SamplingPipeline {
             describer: { ProcessDescriptor.shared.friendlyName(for: $0) },
             bundleIdentifier: { ProcessDescriptor.shared.bundleIdentifier(for: $0) },
             recentlyActiveBundleIds: recentlyActiveBundleIds,
-            connection: connection
+            connection: connection,
+            secondsPerSample: Self.daemonSecondsPerSample
         )
         return (buildResult(
             snapshot: system,
@@ -189,7 +207,8 @@ public actor SamplingPipeline {
             diagnoses: diagnoses,
             history: readDaemonHistory(),
             source: .daemon,
-            daemonStatus: .fresh
+            daemonStatus: .fresh,
+            secondsPerSample: Self.daemonSecondsPerSample
         ), .fresh)
     }
 
@@ -203,7 +222,8 @@ public actor SamplingPipeline {
         diagnoses: [Diagnosis],
         history: [TrendPoint],
         source: Result.Source,
-        daemonStatus: DaemonStatus
+        daemonStatus: DaemonStatus,
+        secondsPerSample: Double
     ) -> Result {
         let now = clock()
         let annotation = durationTracker.annotate(diagnoses, now: now)
@@ -229,7 +249,8 @@ public actor SamplingPipeline {
             history: history,
             harbrStatuses: harbrStatuses,
             source: source,
-            daemonStatus: daemonStatus
+            daemonStatus: daemonStatus,
+            secondsPerSample: secondsPerSample
         )
     }
 

@@ -25,7 +25,8 @@ struct MacSection: View {
                 }
                 ForEach(rows) { proc in
                     ProcessRow(proc: proc, expandedPid: $monitor.expandedPid,
-                               parentLookup: parentLookup, compactMode: compactMode) {
+                               parentLookup: parentLookup, compactMode: compactMode,
+                               secondsPerSample: monitor.secondsPerSample) {
                         UnifiedTrailing(proc: proc)
                     }
                 }

@@ -35,7 +35,7 @@ public enum NotificationSubtitles {
             return "Too many processes competing for CPU."
         case "CPU is critically hot", "CPU is throttling from heat":
             return "Check airflow — performance is being held back."
-        case "Cooling matters more than killing right now":
+        case "Heavy work while your Mac is hot":
             return "Improving airflow will recover more than force-quitting."
 
         // Disk
@@ -43,18 +43,18 @@ public enum NotificationSubtitles {
             return "Clear space to keep the system snappy."
         case "Disk is busy":
             return "Wait for the I/O to finish or close the process moving data."
-        case "Disk and memory are fighting for the same SSD":
+        case "Heavy disk use while memory is tight":
             return "Close the disk-heavy process or free RAM — either breaks the contention."
 
         // Backup
         case "Backup is using your system",
-             "Foreground apps will feel frozen":
+             "Backup is competing with your apps":
             return "Pause the backup to reclaim disk bandwidth."
 
         // Rendering / OS
-        case "Graphics layer is bottlenecking":
+        case "Graphics is working hard":
             return "A graphics-heavy app is behind this — close the biggest one."
-        case "Spotlight is reindexing":
+        case "Spotlight is indexing":
             return "No action needed — this finishes on its own."
 
         // Docker

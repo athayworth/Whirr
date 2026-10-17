@@ -91,12 +91,12 @@ final class SubsumesValidationTests: XCTestCase {
             processes: [proc(name: "ffmpeg", readBps: 300 * 1_048_576)]
         )
         let titles = raw.map(\.title)
-        XCTAssertTrue(titles.contains("Disk and memory are fighting for the same SSD"))
+        XCTAssertTrue(titles.contains("Heavy disk use while memory is tight"))
         XCTAssertTrue(titles.contains("Disk is busy"))
         XCTAssertTrue(titles.contains("Memory is tight"))
 
         let visible = visibleAfterSubsumption(raw).map(\.title)
-        XCTAssertTrue(visible.contains("Disk and memory are fighting for the same SSD"))
+        XCTAssertTrue(visible.contains("Heavy disk use while memory is tight"))
         XCTAssertFalse(visible.contains("Disk is busy"))
         XCTAssertFalse(visible.contains("Memory is tight"))
     }
@@ -110,11 +110,11 @@ final class SubsumesValidationTests: XCTestCase {
             processes: [proc(name: "bztransmit", cpu: 8)]
         )
         let titles = raw.map(\.title)
-        XCTAssertTrue(titles.contains("Foreground apps will feel frozen"))
+        XCTAssertTrue(titles.contains("Backup is competing with your apps"))
         XCTAssertTrue(titles.contains("Backup is using your system"))
 
         let visible = visibleAfterSubsumption(raw).map(\.title)
-        XCTAssertTrue(visible.contains("Foreground apps will feel frozen"))
+        XCTAssertTrue(visible.contains("Backup is competing with your apps"))
         // The narrative subsumes the backup + secondary signals it
         // references, so the standalone "Backup is using your system"
         // must drop out.

@@ -68,6 +68,9 @@ public enum FindingClassifier {
         switch d.title {
         case DiagnosisTitles.swapVolumeOnly, DiagnosisTitles.idleHogs:
             return d.classified(tier: .note, area: .mac, action: nil)
+        case DiagnosisTitles.backupUsing where d.severity == .ok:
+            // A backup ticking over in the background is a fact, not a problem.
+            return d.classified(tier: .note, area: .mac, action: nil)
         case DiagnosisTitles.lowDisk:
             return d.severity == .critical
                 ? d.classified(tier: .problem, area: .mac,

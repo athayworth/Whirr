@@ -16,7 +16,8 @@ public struct RulesEngine: Sendable {
         describer: @escaping @Sendable (ProcessSample) -> String = { $0.name },
         bundleIdentifier: @escaping @Sendable (ProcessSample) -> String? = { _ in nil },
         recentlyActiveBundleIds: Set<String> = [],
-        connection: ConnectionSnapshot? = nil
+        connection: ConnectionSnapshot? = nil,
+        secondsPerSample: Double = 3
     ) -> [Diagnosis] {
         let core = CoreContext(
             snapshot: snapshot,
@@ -26,7 +27,8 @@ public struct RulesEngine: Sendable {
             describer: describer,
             bundleIdentifier: bundleIdentifier,
             recentlyActiveBundleIds: recentlyActiveBundleIds,
-            connection: connection
+            connection: connection,
+            secondsPerSample: secondsPerSample
         )
 
         var standalone: [Diagnosis] = []
@@ -124,6 +126,10 @@ public struct CoreContext {
     /// Passive connection monitor state; nil when unavailable (daemon,
     /// probe without --network, tests that don't care).
     public let connection: ConnectionSnapshot?
+    /// Real time between process samples, so "for the last N seconds"
+    /// copy is true at any sampling interval (daemon: 3 s; in-app: the
+    /// user's setting).
+    public let secondsPerSample: Double
 
     public init(
         snapshot: SystemSnapshot,
@@ -133,9 +139,11 @@ public struct CoreContext {
         describer: @escaping @Sendable (ProcessSample) -> String = { $0.name },
         bundleIdentifier: @escaping @Sendable (ProcessSample) -> String? = { _ in nil },
         recentlyActiveBundleIds: Set<String> = [],
-        connection: ConnectionSnapshot? = nil
+        connection: ConnectionSnapshot? = nil,
+        secondsPerSample: Double = 3
     ) {
         self.connection = connection
+        self.secondsPerSample = secondsPerSample
         self.snapshot = snapshot
         self.processes = processes
         self.coreCount = coreCount
@@ -274,7 +282,7 @@ struct SwapThrashingRule: Rule {
         return Diagnosis(
             title: "Swap is holding old pages",
             detail: String(
-                format: "%.1f GB of memory is parked on disk, but macOS isn't actively moving pages in and out right now. This is a normal after-effect of a memory-heavy session — the number will drop as you close apps.",
+                format: "%.1f GB of memory is parked on disk, but macOS isn't actively moving pages in and out right now. This is a normal after-effect of a memory-heavy session. It may stay until you restart, and isn't slowing anything down right now.",
                 gb
             ),
             severity: .warning
@@ -296,7 +304,7 @@ struct ThermalThrottleRule: Rule {
         case .serious:
             return Diagnosis(
                 title: "CPU is throttling from heat",
-                detail: "Performance is being held back to cool down. Check fan/airflow.",
+                detail: "Performance is being held back to cool down. Keep the vents clear and off soft surfaces; heavy work adds heat.",
                 severity: .warning
             )
         case .fair, .nominal:
@@ -335,7 +343,7 @@ struct BackupHoggingRule: Rule {
         "bzbmenu",
         "backupd",          // Time Machine
         "backupd-helper",
-        "rsync",
+        // rsync is left out: Xcode builds and many tools use it too.
         "restic",
         "borg"
     ]
@@ -355,7 +363,7 @@ struct BackupHoggingRule: Rule {
         let detail: String
         if totalIO >= activeIOBytes {
             detail = String(
-                format: "%@ is reading/writing %@ (%.0f%% CPU). Pause it temporarily to free up disk and memory.",
+                format: "%@ is reading/writing %@ (%.0f%% CPU). Pausing it frees up the disk for your apps.",
                 names, formatMBps(totalIO), totalCPU
             )
         } else {
@@ -448,10 +456,6 @@ struct RunawayProcessRule: Rule {
     /// when running with the default config.
     static let minSustainedSamples = 5
     static let extendedSustainedSamples = 20
-    /// Approximate sampling cadence for converting sample counts to
-    /// human-readable seconds in diagnoses. The sampler enforces a
-    /// 1–60 s clamp; 3 s is the daemon's default and the menu bar app's.
-    private static let assumedIntervalSeconds = 3
 
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         let sustained = ctx.processes
@@ -461,7 +465,7 @@ struct RunawayProcessRule: Rule {
 
         let friendly = ctx.describer(worst)
         let identity = displayCommandLine(for: worst, friendly: friendly)
-        let durationSeconds = worst.sustainedHighCpuSamples * Self.assumedIntervalSeconds
+        let durationSeconds = Int((Double(worst.sustainedHighCpuSamples) * ctx.secondsPerSample).rounded())
         let severity: Severity =
             (worst.cpuPercent >= 200 || worst.sustainedHighCpuSamples >= config.extendedSustainedSamples)
             ? .critical : .warning
@@ -501,7 +505,9 @@ struct BackupChokingForegroundNarrative: NarrativeRule {
 
         let memoryTight = diagnoses.first(withTitle: DiagnosisTitles.memoryTight)
             ?? diagnoses.first(withTitle: DiagnosisTitles.memorySaturated)
-        let swapping = diagnoses.first(withAnyTitle: DiagnosisTitles.anySwap)
+        // Only real paging counts — parked swap that isn't moving isn't
+        // competing with anything.
+        let swapping = diagnoses.first(withTitle: DiagnosisTitles.swapActivelyPaging)
         let thermal = diagnoses.first(withTitle: DiagnosisTitles.thermalWarning)
             ?? diagnoses.first(withTitle: DiagnosisTitles.thermalCritical)
 
@@ -509,17 +515,21 @@ struct BackupChokingForegroundNarrative: NarrativeRule {
         guard !secondarySignals.isEmpty else { return nil }
 
         let names = backup.culprits.sorted().joined(separator: ", ")
+        let backupIO = ctx.processes.filter { backup.culprits.contains($0.name) }
+            .reduce(UInt64(0)) { $0 &+ $1.diskIOBytesPerSec }
+        let heavyIO = backupIO >= 5 * 1_048_576
         var pieces: [String] = []
         if memoryTight != nil { pieces.append("memory is tight") }
-        if swapping != nil { pieces.append("the system is swapping") }
-        if thermal != nil { pieces.append("the CPU is throttling from heat") }
+        if swapping != nil { pieces.append("macOS is actively reading from swap") }
+        if thermal != nil { pieces.append("the Mac is throttling from heat") }
         let situation = joinNaturally(pieces)
+        let activity = heavyIO ? "is reading and writing \(formatMBps(backupIO)) on the disk" : "is running"
 
         let severity = secondarySignals.map(\.severity).max() ?? backup.severity
         return Diagnosis(
-            title: "Foreground apps will feel frozen",
-            detail: "\(names) is hammering the disk while \(situation). "
-                + "Backup reads compete with everything else on the SSD — pausing it is the fastest fix.",
+            title: "Backup is competing with your apps",
+            detail: "\(names) \(activity) while \(situation). "
+                + "Pausing the backup until you're done gives that capacity back to your apps.",
             severity: severity,
             culprits: backup.culprits,
             kind: .narrative,
@@ -530,9 +540,9 @@ struct BackupChokingForegroundNarrative: NarrativeRule {
     }
 }
 
-/// Thermal throttle + a CPU-pegged process: the throttle is the bottleneck,
-/// not the workload. Killing the runaway process won't bring back the lost
-/// performance until the CPU cools off.
+/// Thermal throttle + a CPU-pegged process. Both are measured; which one
+/// is "the" bottleneck isn't, so the copy names both and says how they
+/// relate.
 struct ThermalThrottleAmplifierNarrative: NarrativeRule {
     let config: NarrativeToggle
     var isEnabled: Bool { config.enabled }
@@ -545,10 +555,9 @@ struct ThermalThrottleAmplifierNarrative: NarrativeRule {
 
         let culprit = runaway.culprits.first ?? "the top process"
         return Diagnosis(
-            title: "Cooling matters more than killing right now",
-            detail: "\(culprit) is pegging the CPU and the CPU is already throttling from heat — "
-                + "the throttle is the bottleneck, not the workload. "
-                + "Improving airflow (or pausing nearby heavy work) will recover more performance than force-quitting.",
+            title: "Heavy work while your Mac is hot",
+            detail: "\(culprit) is pegging the CPU while the Mac is already throttling from heat. "
+                + "Heavy work adds heat, so pausing it helps the Mac cool down; keeping vents clear helps too.",
             severity: thermal.severity,
             culprits: runaway.culprits,
             kind: .narrative
@@ -580,9 +589,10 @@ struct DiskMemoryContentionNarrative: NarrativeRule {
 
         let culprit = disk.culprits.first ?? "a process"
         return Diagnosis(
-            title: "Disk and memory are fighting for the same SSD",
-            detail: "\(culprit) is doing heavy disk I/O while memory pressure forces macOS to page from the same drive. "
-                + "Closing \(culprit) or freeing RAM (either one) breaks the contention.",
+            title: "Heavy disk use while memory is tight",
+            detail: "\(culprit) is doing heavy disk I/O while memory is tight. "
+                + "When memory runs short, macOS swaps to that same drive, so the two can slow each other down. "
+                + "Closing \(culprit) or freeing memory helps.",
             severity: max(disk.severity, memoryTight.severity),
             culprits: disk.culprits,
             kind: .narrative,
@@ -658,14 +668,15 @@ struct WindowServerHogNarrative: NarrativeRule {
         // Critical promotion ratio (2× the warning threshold) is hardcoded
         // — `100%` was the prior shape and tweaking it independently of
         // the warning threshold has never come up in practice.
-        let severity: Severity = ws.cpuPercent >= (config.cpuPercentThreshold * 2) ? .critical : .warning
+        // High WindowServer CPU is common on high-refresh or 5K displays,
+        // so it's never treated as critical on its own.
         return Diagnosis(
-            title: "Graphics layer is bottlenecking",
+            title: "Graphics is working hard",
             detail: String(
-                format: "WindowServer is at %.0f%% CPU — usually a heavy graphics app (Chrome/Safari with many tabs, an Electron app, fullscreen video, a screen recorder) is the cause. Closing or relaunching the heaviest one is the fastest fix.",
+                format: "WindowServer, which draws everything on screen, is at %.0f%% CPU. Common causes: a browser with many tabs, an Electron app, fullscreen video, a screen recorder, or a high-resolution display. If things feel slow, closing or relaunching the heaviest of those helps.",
                 ws.cpuPercent
             ),
-            severity: severity,
+            severity: .warning,
             culprits: ["WindowServer"],
             kind: .narrative
         )
@@ -788,20 +799,21 @@ struct SpotlightReindexNarrative: NarrativeRule {
         let totalCPU = active.reduce(0.0) { $0 + $1.cpuPercent }
         let totalIO = active.reduce(UInt64(0)) { $0 &+ $1.diskIOBytesPerSec }
 
+        let who = active.map(\.name).sorted().joined(separator: " and ")
         let detail: String
         if totalIO >= activeIOBytes {
             detail = String(
-                format: "Spotlight is rebuilding its index — mds_stores is reading from disk at %@. Expect 10–30 minutes of degraded performance until it finishes. Common triggers: new volume mounted, large file move, recent system update.",
-                formatMBps(totalIO)
+                format: "Spotlight (%@) is indexing — reading from disk at %@. It finishes on its own; stopping it doesn't help, because macOS restarts it.",
+                who, formatMBps(totalIO)
             )
         } else {
             detail = String(
-                format: "Spotlight is reindexing — mds_stores is using %.0f%% CPU. Expect 10–30 minutes of degraded performance until it finishes. The right move is usually to wait it out, not to kill it (it'll just restart).",
-                totalCPU
+                format: "Spotlight (%@) is indexing — using %.0f%% CPU. It finishes on its own; stopping it doesn't help, because macOS restarts it.",
+                who, totalCPU
             )
         }
         return Diagnosis(
-            title: "Spotlight is reindexing",
+            title: "Spotlight is indexing",
             detail: detail,
             severity: .warning,
             culprits: active.map(\.name),
@@ -850,15 +862,18 @@ struct MemoryLeakNarrative: NarrativeRule {
         let formerGB = Double(formerBytes) / 1_073_741_824
         let deltaGB = Double(worst.delta) / 1_073_741_824
 
-        let severity: Severity = worst.delta >= critBytes ? .critical : .warning
+        // Growth alone isn't proof of a leak (opening big files, indexing,
+        // starting containers all grow memory), so this never goes critical.
+        _ = critBytes
         let name = ctx.describer(worst.proc)
+        let windowMinutes = max(1, Int((Double(ProcessSampler.memoryHistoryCapacity) * ctx.secondsPerSample / 60).rounded()))
         return Diagnosis(
             title: "\(name) memory has been growing",
             detail: String(
-                format: "%@ went from %.1f GB to %.1f GB (+%.1f GB) in the last 10 minutes. This is the leak pattern — restarting it would recover that memory.",
-                name, formerGB, currentGB, deltaGB
+                format: "%@ went from %.1f GB to %.1f GB (+%.1f GB) within the last %d minutes. If it keeps growing without you doing more in it, restarting it will free that memory.",
+                name, formerGB, currentGB, deltaGB, windowMinutes
             ),
-            severity: severity,
+            severity: .warning,
             culprits: [name],
             kind: .narrative
         )
@@ -883,9 +898,6 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
     static let memoryFloorBytes: UInt64 = 500 * 1_048_576
     static let minIdleSamples = 100
     static let combinedMemoryThresholdBytes: UInt64 = 2 * 1_073_741_824
-    /// Approximate sampling cadence for converting sample counts to
-    /// minutes in the user-facing message.
-    private static let assumedIntervalSeconds = 3
 
     func evaluate(_ ctx: CoreContext, diagnoses: [Diagnosis]) -> Diagnosis? {
         let floorBytes = UInt64(config.memoryFloorMB * 1_048_576)
@@ -915,8 +927,8 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
         // Longest streak in the candidate set — phrased as a maximum, not a
         // minimum, because using "≥ X" with the max of the group overstates
         // what's true for the smaller candidates.
-        let longestIdleMinutes = (candidates.map(\.sustainedIdleSamples).max() ?? 0)
-            * Self.assumedIntervalSeconds / 60
+        let longestIdleMinutes = Int(Double(candidates.map(\.sustainedIdleSamples).max() ?? 0)
+            * ctx.secondsPerSample / 60)
 
         let pieces = topThree.map { proc -> String in
             "\(ctx.describer(proc)) (\(formatMemory(proc.memoryBytes)))"

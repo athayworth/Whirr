@@ -22,23 +22,23 @@ final class NotificationSubtitlesTests: XCTestCase {
     func testThermalSubtitles() {
         XCTAssertNotNil(NotificationSubtitles.subtitle(for: "CPU is critically hot"))
         XCTAssertNotNil(NotificationSubtitles.subtitle(for: "CPU is throttling from heat"))
-        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Cooling matters more than killing right now"))
+        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Heavy work while your Mac is hot"))
     }
 
     func testDiskSubtitles() {
         XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Disk is nearly full"))
         XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Disk is busy"))
-        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Disk and memory are fighting for the same SSD"))
+        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Heavy disk use while memory is tight"))
     }
 
     func testBackupSubtitles() {
         XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Backup is using your system"))
-        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Foreground apps will feel frozen"))
+        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Backup is competing with your apps"))
     }
 
     func testOtherNarrativeSubtitles() {
-        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Graphics layer is bottlenecking"))
-        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Spotlight is reindexing"))
+        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Graphics is working hard"))
+        XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Spotlight is indexing"))
         XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Docker is using significant resources"))
         XCTAssertNotNil(NotificationSubtitles.subtitle(for: "Big processes that look unused"))
         XCTAssertNotNil(NotificationSubtitles.subtitle(for: "System is overloaded"))

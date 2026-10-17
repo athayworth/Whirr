@@ -57,7 +57,7 @@ public final class ProcessSampler {
     /// the overhead is ~1.6 MB which is fine for the menu bar app.
     private var memoryHistory: [Int32: [UInt64]] = [:]
     /// 200 samples × 3 s = 10 minutes of memory history per process.
-    private static let memoryHistoryCapacity = 200
+    static let memoryHistoryCapacity = 200
     /// Cached command lines. We use `[Int32: String?]` so a failed read
     /// (e.g. other-user process when we're not root) is remembered as
     /// nil rather than retried every sample — that would otherwise burn

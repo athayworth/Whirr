@@ -17,6 +17,8 @@ struct ProcessRow<Trailing: View>: View {
     /// The row is still clickable to expand — we just hide the affordance
     /// glyph. Row height drops by ~4 pt and horizontal noise drops too.
     let compactMode: Bool
+    /// Real seconds between samples, for "idle Nm" and the growth window.
+    var secondsPerSample: Double = 3
     @ViewBuilder var trailing: () -> Trailing
 
     private var isExpanded: Bool { expandedPid == proc.pid }
@@ -57,7 +59,8 @@ struct ProcessRow<Trailing: View>: View {
                     proc: proc,
                     safety: safety,
                     description: description,
-                    parentLookup: parentLookup
+                    parentLookup: parentLookup,
+                    secondsPerSample: secondsPerSample
                 )
             }
         }
@@ -69,6 +72,7 @@ private struct ProcessDetail: View {
     let safety: ProcessSafety
     let description: ProcessDescription
     let parentLookup: (Int32) -> ProcessSample?
+    let secondsPerSample: Double
     /// Drives a native confirmationDialog before SIGKILL. Consistent
     /// with the Docker "Stop all" / "Restart all" affordances.
     @State private var showForceQuitConfirm = false
@@ -131,12 +135,12 @@ private struct ProcessDetail: View {
                 Text(MenuFormat.bytes(proc.memoryBytes))
                 if let delta = proc.memoryDelta10MinBytes, delta >= 100 * 1_048_576 {
                     Text("·")
-                    Text("+\(MenuFormat.bytes(UInt64(delta))) /10m")
+                    Text("+\(MenuFormat.bytes(UInt64(delta))) /\(Int((200 * secondsPerSample / 60).rounded()))m")
                         .foregroundStyle(.red)
                 }
                 if proc.sustainedIdleSamples >= 100 {
                     Text("·")
-                    Text("idle \(proc.sustainedIdleSamples * 3 / 60)m")
+                    Text("idle \(Int(Double(proc.sustainedIdleSamples) * secondsPerSample / 60))m")
                         .foregroundStyle(.tertiary)
                 }
             }

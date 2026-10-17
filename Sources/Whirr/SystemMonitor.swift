@@ -51,6 +51,7 @@ final class SystemMonitor {
     var verdict: Verdict = .allClear
     /// "Can I keep going?" summary shown at the top of the menu.
     var headroom: HeadroomAssessment = .empty
+    var secondsPerSample: Double = 3
     var topProcesses: [ProcessSample] = []
     var topMemoryProcesses: [ProcessSample] = []
     /// Indexed by pid for fast parent-process lookup from the drill-in
@@ -265,6 +266,7 @@ final class SystemMonitor {
             snoozeStore.isSnoozed(title) || snoozeStore.isMuted(title)
         })
         self.headroom = result.headroom
+        self.secondsPerSample = result.secondsPerSample
         self.harbrStatuses = result.harbrStatuses
         self.daemonStatus = result.daemonStatus
         // `uniquingKeysWith` over `uniqueKeysWithValues` — duplicate pids

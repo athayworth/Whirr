@@ -450,7 +450,7 @@ final class RulesEngineTests: XCTestCase {
             processes: [process(name: "bztransmit", cpu: 8)]
         )
         let narrative = result.first { $0.kind == .narrative }
-        XCTAssertEqual(narrative?.title, "Foreground apps will feel frozen")
+        XCTAssertEqual(narrative?.title, "Backup is competing with your apps")
         XCTAssertTrue(narrative?.detail.contains("bztransmit") ?? false)
     }
 
@@ -498,7 +498,7 @@ final class RulesEngineTests: XCTestCase {
         )
         let narratives = result.filter { $0.kind == .narrative }
         XCTAssertEqual(narratives.count, 1)
-        XCTAssertEqual(narratives.first?.title, "Foreground apps will feel frozen")
+        XCTAssertEqual(narratives.first?.title, "Backup is competing with your apps")
     }
 
     func testBackupNarrativeDescribesActualSecondarySignal() {
@@ -524,7 +524,7 @@ final class RulesEngineTests: XCTestCase {
             processes: [process(pid: 42, name: "ffmpeg", cpu: 250,
                                 sustained: RunawayProcessRule.minSustainedSamples)]
         )
-        let narrative = result.first { $0.title == "Cooling matters more than killing right now" }
+        let narrative = result.first { $0.title == "Heavy work while your Mac is hot" }
         XCTAssertNotNil(narrative)
         XCTAssertTrue(narrative?.detail.contains("ffmpeg") ?? false)
         XCTAssertEqual(narrative?.severity, .critical)
@@ -536,7 +536,7 @@ final class RulesEngineTests: XCTestCase {
             snapshot: snapshot(thermal: .serious),
             processes: []
         )
-        XCTAssertNil(onlyThermal.first { $0.title == "Cooling matters more than killing right now" })
+        XCTAssertNil(onlyThermal.first { $0.title == "Heavy work while your Mac is hot" })
 
         // Runaway alone — no narrative.
         let onlyRunaway = engine.evaluate(
@@ -544,7 +544,7 @@ final class RulesEngineTests: XCTestCase {
             processes: [process(name: "ffmpeg", cpu: 250,
                                 sustained: RunawayProcessRule.minSustainedSamples)]
         )
-        XCTAssertNil(onlyRunaway.first { $0.title == "Cooling matters more than killing right now" })
+        XCTAssertNil(onlyRunaway.first { $0.title == "Heavy work while your Mac is hot" })
     }
 
     func testDiskMemoryContentionNarrativeFires() {
@@ -553,7 +553,7 @@ final class RulesEngineTests: XCTestCase {
             snapshot: snapshot(pressure: .warning),
             processes: [process(name: "ffmpeg", readBps: 300 * .mb)]
         )
-        let narrative = result.first { $0.title == "Disk and memory are fighting for the same SSD" }
+        let narrative = result.first { $0.title == "Heavy disk use while memory is tight" }
         XCTAssertNotNil(narrative)
         XCTAssertTrue(narrative?.detail.contains("ffmpeg") ?? false)
     }
@@ -581,7 +581,7 @@ final class RulesEngineTests: XCTestCase {
         )
         let narratives = result.filter { $0.kind == .narrative }
         XCTAssertEqual(narratives.count, 1)
-        XCTAssertEqual(narratives.first?.title, "Foreground apps will feel frozen")
+        XCTAssertEqual(narratives.first?.title, "Backup is competing with your apps")
     }
 
     // MARK: - WindowServerHogNarrative
@@ -591,17 +591,20 @@ final class RulesEngineTests: XCTestCase {
             snapshot: snapshot(),
             processes: [process(name: "WindowServer", cpu: 75)]
         )
-        let narrative = result.first { $0.title == "Graphics layer is bottlenecking" }
+        let narrative = result.first { $0.title == "Graphics is working hard" }
         XCTAssertEqual(narrative?.severity, .warning)
     }
 
-    func testWindowServerNarrativeCriticalAt100Percent() {
+    func testWindowServerNarrativeNeverCritical() {
+        // High WindowServer CPU is normal on high-refresh/5K displays, so
+        // it's information, never a red alarm.
         let result = engine.evaluate(
             snapshot: snapshot(),
             processes: [process(name: "WindowServer", cpu: 130)]
         )
-        let narrative = result.first { $0.title == "Graphics layer is bottlenecking" }
-        XCTAssertEqual(narrative?.severity, .critical)
+        let narrative = result.first { $0.title == "Graphics is working hard" }
+        XCTAssertEqual(narrative?.severity, .warning)
+        XCTAssertTrue(narrative?.detail.contains("Common causes") ?? false)
     }
 
     func testWindowServerNarrativeDoesNotFireWhenIdle() {
@@ -609,7 +612,7 @@ final class RulesEngineTests: XCTestCase {
             snapshot: snapshot(),
             processes: [process(name: "WindowServer", cpu: 20)]
         )
-        XCTAssertNil(result.first { $0.title == "Graphics layer is bottlenecking" })
+        XCTAssertNil(result.first { $0.title == "Graphics is working hard" })
     }
 
     // MARK: - SpotlightReindexNarrative
@@ -619,9 +622,10 @@ final class RulesEngineTests: XCTestCase {
             snapshot: snapshot(),
             processes: [process(name: "mds_stores", cpu: 5, readBps: 60 * .mb)]
         )
-        let narrative = result.first { $0.title == "Spotlight is reindexing" }
+        let narrative = result.first { $0.title == "Spotlight is indexing" }
         XCTAssertNotNil(narrative)
-        XCTAssertTrue(narrative?.detail.contains("rebuilding") ?? false)
+        XCTAssertTrue(narrative?.detail.contains("indexing") ?? false)
+        XCTAssertFalse(narrative?.detail.contains("minutes") ?? true, "no invented duration")
     }
 
     func testSpotlightNarrativeFiresOnSustainedCpu() {
@@ -630,7 +634,7 @@ final class RulesEngineTests: XCTestCase {
             processes: [process(name: "mds_stores", cpu: 100,
                                 sustained: RunawayProcessRule.minSustainedSamples)]
         )
-        let narrative = result.first { $0.title == "Spotlight is reindexing" }
+        let narrative = result.first { $0.title == "Spotlight is indexing" }
         XCTAssertNotNil(narrative)
     }
 
@@ -642,7 +646,7 @@ final class RulesEngineTests: XCTestCase {
             processes: [process(name: "mds_stores", cpu: 5, readBps: 100 * .mb)]
         )
         XCTAssertFalse(titles(result).contains("Disk is busy"))
-        XCTAssertTrue(titles(result).contains("Spotlight is reindexing"))
+        XCTAssertTrue(titles(result).contains("Spotlight is indexing"))
     }
 
     func testSpotlightDoesNotFireWhenIdle() {
@@ -650,7 +654,7 @@ final class RulesEngineTests: XCTestCase {
             snapshot: snapshot(),
             processes: [process(name: "mds_stores", cpu: 1, readBps: 0)]
         )
-        XCTAssertNil(result.first { $0.title == "Spotlight is reindexing" })
+        XCTAssertNil(result.first { $0.title == "Spotlight is indexing" })
     }
 
     // MARK: - Docker as a major share
@@ -800,7 +804,7 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertTrue(narrative?.detail.contains("10 minutes") ?? false)
     }
 
-    func testMemoryLeakCriticalAtTwoGigGrowth() {
+    func testMemoryGrowthIsNeverCalledALeakOrCritical() {
         let result = engine.evaluate(
             snapshot: snapshot(),
             processes: [process(
@@ -810,7 +814,20 @@ final class RulesEngineTests: XCTestCase {
             )]
         )
         let narrative = result.first { $0.title.contains("growing") }
-        XCTAssertEqual(narrative?.severity, .critical)
+        XCTAssertEqual(narrative?.severity, .warning)
+        XCTAssertFalse(narrative?.detail.contains("leak") ?? true)
+        XCTAssertTrue(narrative?.detail.contains("within the last 10 minutes") ?? false, narrative?.detail ?? "")
+    }
+
+    func testDurationsUseRealSampleTiming() {
+        // 20 samples at 15 s each is 5 minutes, not 60 seconds.
+        let result = engine.evaluate(
+            snapshot: snapshot(),
+            processes: [process(pid: 1, name: "node", cpu: 95, sustained: 20)],
+            secondsPerSample: 15
+        )
+        let runaway = result.first { $0.title.hasSuffix("has been pegging CPU") }
+        XCTAssertTrue(runaway?.detail.contains("300 seconds") ?? false, runaway?.detail ?? "")
     }
 
     func testMemoryLeakIgnoresProcessesBelowFloor() {
