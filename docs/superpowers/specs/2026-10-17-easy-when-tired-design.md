@@ -133,8 +133,8 @@ and whether every process is visible. Output: `[Story]`, ranked.
   router is stalling." Max three phrases, then "and N more".
 - **Action.** The top story's action.
 - **Headroom consistency.** The Mac answer card is driven by stories, not by
-  the headroom assessor; headroom becomes one of the key facts. "Working fine"
-  can never sit above a problem.
+  the headroom assessor; the headroom figure moves into the "All
+  measurements" fold. "Working fine" can never sit above a problem.
 - **Notifications.** One per story (keyed by the headline title); the 5-minute
   and actionable gates apply to the story.
 
