@@ -101,10 +101,50 @@ final class HistoryDigestTests: XCTestCase {
     }
 
     func testPatternsNeedThreeDays() {
-        let three = (0..<3).map { incident(DiagnosisTitles.overloaded, day: -$0, hour: 13, hours: 0.5) }
+        let three = (0..<3).map { incident(DiagnosisTitles.overloaded, day: -$0, hour: 13, hours: 0.5) }  // 30 min each
         XCTAssertEqual(digest(incidents: three).patterns, ["System is overloaded on 3 of the last 7 days"])
         XCTAssertTrue(digest(incidents: Array(three.prefix(2))).patterns.isEmpty)
         let outs = (0..<4).map { outage(day: -$0, hour: 12) }
         XCTAssertEqual(digest(outages: outs).patterns, ["Outages on 4 of the last 7 days"])
+    }
+
+    func testFlickersThatNeverPassedTheTwoMinuteGateAreLeftOut() {
+        let brief = incident(DiagnosisTitles.overloaded, day: 0, hour: 13, hours: 5.0 / 3600)   // 5 s
+        let real = incident(DiagnosisTitles.memoryTight, day: 0, hour: 9, hours: 0.5)
+        let d = digest(incidents: [brief, real])
+        XCTAssertEqual(d.days.first?.events.map(\.text), [DiagnosisTitles.memoryTight])
+    }
+
+    func testOwnerClauseIsNotRepeatedWhenTheTitleAlreadyNamesIt() {
+        let vm = "Virtualization VM (probably Docker)"
+        let d = digest(incidents: [incident("\(vm) has been pegging CPU", day: 0, hour: 13, hours: 2, culprits: [vm])])
+        XCTAssertFalse(d.weekSentence.contains("involved"), d.weekSentence)
+        XCTAssertFalse(d.days.first?.events.first?.text.contains("(") == true
+                       && d.days.first?.events.first?.text.hasSuffix("(\(vm))") == true)
+    }
+
+    func testRepeatsWithinADayFoldIntoOneRow() {
+        let d = digest(incidents: [incident("Graphics is working hard", day: 0, hour: 9, hours: 0.1, culprits: ["WindowServer"]),
+                                   incident("Graphics is working hard", day: 0, hour: 11, hours: 0.2, culprits: ["WindowServer"]),
+                                   incident("Graphics is working hard", day: -1, hour: 11, hours: 0.2, culprits: ["WindowServer"])])
+        let today = d.days.first!
+        XCTAssertEqual(today.events.count, 1)
+        XCTAssertEqual(today.events[0].text, "Graphics is working hard (WindowServer) — 2 times")
+        XCTAssertEqual(today.events[0].durationSeconds, 1080)
+        XCTAssertEqual(today.events[0].at, at(day: 0, hour: 11))
+        XCTAssertEqual(d.days[1].events.count, 1)
+    }
+
+    func testRawProcessNamesReadAsFriendlyNames() {
+        let d = digest(incidents: [incident(DiagnosisTitles.diskBusy, day: 0, hour: 9, hours: 0.1,
+                                            culprits: ["com.apple.Virtualization.Virtua"])])
+        XCTAssertEqual(d.days.first?.events.first?.text, "Disk is busy (Virtualization VM)")
+    }
+
+    func testDaySummaryUsesTheSameTotalsAsTheRows() {
+        let d = digest(incidents: [incident(DiagnosisTitles.memoryTight, day: 0, hour: 8, hours: 1),
+                                   incident(DiagnosisTitles.overloaded, day: 0, hour: 10, hours: 0.75),
+                                   incident(DiagnosisTitles.overloaded, day: 0, hour: 12, hours: 0.75)])
+        XCTAssertEqual(d.days.first?.summary, "System is overloaded — 2 times for 1 h 30 min")
     }
 }

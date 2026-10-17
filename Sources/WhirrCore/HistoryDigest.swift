@@ -37,8 +37,11 @@ public struct HistoryDigest: Sendable, Equatable {
                                networkId: String?, now: Date, calendar: Calendar = .current) -> HistoryDigest {
         let since = calendar.date(byAdding: .day, value: -(windowDays - 1), to: calendar.startOfDay(for: now))!
 
+        // Only what Whirr actually raised: problems that outlasted the
+        // 2-minute gate. Shorter flickers never reached the person.
         let problems = incidents.filter {
             $0.tier == .problem && $0.title != ConnectionTitles.outage && $0.lastSeenAt >= since && $0.firstSeenAt <= now
+                && $0.durationSeconds >= VerdictSelector.iconGateSeconds
         }
         let outs = outages.filter {
             (networkId == nil || $0.networkId == networkId) && $0.start >= since && $0.start <= now
@@ -47,14 +50,19 @@ public struct HistoryDigest: Sendable, Equatable {
 
         // MARK: Events
         var events: [HistoryEvent] = []
-        for i in problems {
-            let owner = i.culprits.first.map {
-                CulpritOwner.owner(of: $0, dockerRunning: i.culprits.contains { $0.hasPrefix("com.docker.") })
-            }
-            let text = owner.map { i.title.contains($0) ? i.title : "\(i.title) (\($0))" } ?? i.title
-            events.append(HistoryEvent(id: i.id.uuidString, at: i.firstSeenAt,
-                                       kind: i.area == .connection ? .connection : .mac,
-                                       text: text, durationSeconds: i.durationSeconds))
+        // Repeats of the same problem on the same day fold into one row:
+        // latest start, total time, "— N times".
+        let problemGroups = Dictionary(grouping: problems) {
+            "\(calendar.startOfDay(for: $0.firstSeenAt).timeIntervalSince1970)|\(label(for: $0))"
+        }
+        for (_, group) in problemGroups {
+            let latest = group.max { $0.firstSeenAt < $1.firstSeenAt }!
+            let base = label(for: latest)
+            events.append(HistoryEvent(
+                id: latest.id.uuidString, at: latest.firstSeenAt,
+                kind: latest.area == .connection ? .connection : .mac,
+                text: group.count > 1 ? "\(base) — \(group.count) times" : base,
+                durationSeconds: totalSeconds(group)))
         }
         for o in outs {
             events.append(HistoryEvent(id: o.id.uuidString, at: o.start, kind: .connection,
@@ -75,8 +83,11 @@ public struct HistoryDigest: Sendable, Equatable {
             if !dayOutages.isEmpty {
                 pieces.append("\(count(dayOutages.count, "outage")) (\(DurationText.words(seconds: totalSeconds(dayOutages))))")
             }
-            if let longest = dayProblems.max(by: { $0.durationSeconds < $1.durationSeconds }) {
-                pieces.append("\(longest.title) for \(DurationText.words(seconds: longest.durationSeconds))")
+            // Same totals as the rows: the problem with the most time that day.
+            if let (label, group) = Dictionary(grouping: dayProblems, by: { Self.label(for: $0) })
+                .max(by: { totalSeconds($0.value) < totalSeconds($1.value) }) {
+                let name = group.count > 1 ? "\(label) — \(group.count) times" : label
+                pieces.append("\(name) for \(DurationText.words(seconds: totalSeconds(group)))")
             }
             if chs.contains(where: { calendar.startOfDay(for: $0.at) == day }) {
                 pieces.append("Wi-Fi channel changed")
@@ -106,7 +117,9 @@ public struct HistoryDigest: Sendable, Equatable {
             let (title, list) = byTitle.max { totalSeconds($0.value) < totalSeconds($1.value) }!
             let total = totalSeconds(list)
             var s = "Longest-running Mac problem: \(title) (\(DurationText.words(seconds: total)) in total)"
-            if let owner = dominantOwner(list, total: total) { s += ", mostly with \(owner) involved" }
+            if let owner = dominantOwner(list, total: total), !title.contains(owner) {
+                s += ", mostly with \(owner) involved"
+            }
             sentences.append(s)
         }
         let week = sentences.isEmpty
@@ -139,6 +152,16 @@ public struct HistoryDigest: Sendable, Equatable {
         }
         guard let (owner, t) = time.max(by: { $0.value < $1.value }), Double(t) >= Double(total) * 2 / 3 else { return nil }
         return owner
+    }
+
+    /// "Disk is busy (Virtualization VM)": the title plus who was involved,
+    /// unless the title already names them.
+    static func label(for i: DiagnosisIncident) -> String {
+        guard let culprit = i.culprits.first else { return i.title }
+        let docker = i.culprits.contains { $0.hasPrefix("com.docker.") }
+        var owner = CulpritOwner.owner(of: culprit, dockerRunning: docker)
+        if owner.hasPrefix("com.apple.Virtualization") { owner = "Virtualization VM" }
+        return i.title.contains(owner) ? i.title : "\(i.title) (\(owner))"
     }
 
     static func shortCause(_ c: OutageCause) -> String {
