@@ -1,30 +1,34 @@
 import SwiftUI
 import WhirrCore
 
-/// "Is it my Mac or my connection, and what's the one thing to do?"
+/// "Is anything wrong, what, and what do I do?" — then the two areas.
 struct OverviewSection: View {
     @Bindable var monitor: SystemMonitor
 
     var body: some View {
         SectionPage(title: "Overview") {
-            VerdictCard(monitor: monitor)
-            if !monitor.verdict.also.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Also").font(.headline)
-                    ForEach(monitor.verdict.also) { context in
-                        Button {
-                            monitor.nav.selectedSection = SidebarItem.allCases.first { $0.area == context.diagnosis.area }
-                        } label: {
-                            HStack {
-                                Image(systemName: context.symbol).foregroundStyle(context.displayTint)
-                                Text(context.diagnosis.title)
+            AnswerCard(monitor: monitor, area: nil)
+            let others = Array(monitor.verdict.stories.dropFirst())
+            if !others.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(others) { story in
+                        Button { monitor.nav.openStory(story) } label: {
+                            HStack(alignment: .firstTextBaseline) {
+                                Image(systemName: story.headline.symbol).foregroundStyle(story.headline.displayTint)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("Also: \(story.phrase)")
+                                    if let because = story.because {
+                                        Text(because).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
                                 Spacer()
+                                Text("Why?").font(.caption).foregroundStyle(.tint)
                                 Image(systemName: "chevron.right").foregroundStyle(.tertiary)
                             }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 5)
                     }
                 }
             }
@@ -37,82 +41,14 @@ struct OverviewSection: View {
 
     private var macLine: String {
         guard monitor.hasSampledYet else { return "Checking…" }
-        return monitor.headroom.headline
-    }
-}
-
-/// The big card at the top of Overview.
-private struct VerdictCard: View {
-    @Bindable var monitor: SystemMonitor
-    @State private var confirming: SuggestedAction?
-
-    var body: some View {
-        Group {
-            if !monitor.hasSampledYet {
-                card(tint: .secondary, symbol: "hourglass", title: "Checking your Mac and connection…",
-                     detail: "This takes a few seconds.")
-            } else if let headline = monitor.verdict.headline {
-                card(tint: headline.diagnosis.severity.tint, symbol: headline.symbol,
-                     title: headline.diagnosis.title, detail: headline.diagnosis.detail) {
-                    HStack(spacing: 10) {
-                        if let action = headline.diagnosis.action {
-                            Button(action.label) {
-                                if ActionText.needsConfirmation(action) { confirming = action } else { monitor.perform(action) }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(headline.diagnosis.severity.tint)
-                            .controlSize(.large)
-                        }
-                        Button("Not now") { monitor.snoozeStore.snooze(headline.diagnosis.title) }
-                            .help("Snooze for 1 hour")
-                        Button("This is normal for me") { monitor.snoozeStore.mute(headline.diagnosis.title) }
-                        Spacer()
-                        Text("for \(MenuFormat.duration(seconds: headline.durationSeconds))")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            } else if let first = monitor.verdict.pending.first {
-                card(tint: .secondary, symbol: "eye",
-                     title: "Keeping an eye on something",
-                     detail: "\(first.diagnosis.title) just started. Whirr waits a couple of minutes before raising a problem, so brief blips stay quiet. Details are in the \(SidebarItem.allCases.first { $0.area == first.diagnosis.area }?.title ?? "relevant") section.")
-            } else {
-                card(tint: .green, symbol: "checkmark.circle.fill",
-                     title: "Everything's running smoothly",
-                     detail: "Whirr keeps watching your Mac and your connection in the background and will let you know if something needs attention.")
-            }
+        let pressure: String
+        switch monitor.systemSnapshot.memoryPressure {
+        case .normal: pressure = "memory pressure normal"
+        case .warning: pressure = "memory pressure elevated"
+        case .critical: pressure = "memory pressure high"
         }
-        .confirmationDialog(
-            confirming?.label ?? "",
-            isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
-            presenting: confirming
-        ) { action in
-            Button(action.label, role: .destructive) { monitor.perform(action) }
-        } message: { Text(ActionText.confirmation(for: $0)) }
-    }
-
-    private func card<Actions: View>(
-        tint: Color, symbol: String, title: String, detail: String,
-        @ViewBuilder actions: () -> Actions = { EmptyView() }
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Image(systemName: symbol)
-                    .font(.title)
-                    .foregroundStyle(tint)
-                    .accessibilityHidden(true)
-                Text(title).font(.title2.weight(.semibold))
-            }
-            Text(detail)
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            actions()
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(tint.opacity(0.1)))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(tint.opacity(0.25)))
+        let top = monitor.verdict.stories.first { $0.area == .mac }
+        return (top.map { $0.phrase.sentenceCased } ?? "No problems right now") + " · " + pressure
     }
 }
 

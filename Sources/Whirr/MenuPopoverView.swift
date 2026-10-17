@@ -1,33 +1,57 @@
 import SwiftUI
 import WhirrCore
 
-/// The menu bar popover: the headline and a way into the window.
-/// Everything else lives in the main window.
+/// The menu bar popover: the one-sentence answer, the one action, the
+/// other causes as single lines, and a way into the window.
 struct MenuPopoverView: View {
     @Bindable var monitor: SystemMonitor
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
 
+    private var top: Story? { monitor.verdict.stories.first }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 StatusDot(severity: monitor.verdict.worst, sampled: monitor.hasSampledYet)
                 Text(headline).font(.headline).fixedSize(horizontal: false, vertical: true)
             }
-            if let detail {
-                Text(detail).font(.callout).foregroundStyle(.secondary)
-                    .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+            if let because = top?.because {
+                Text(because).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            if let action = monitor.verdict.headline?.diagnosis.action, !ActionText.needsConfirmation(action) {
-                Button(action.label) { monitor.perform(action) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(monitor.verdict.worst.tint)
+            if let top, let action = top.action {
+                if ActionText.needsConfirmation(action) {
+                    // Confirmation dialogs belong in the window.
+                    Button(action.label) { open(top) }
+                        .buttonStyle(.borderedProminent).tint(monitor.verdict.worst.tint)
+                } else {
+                    Button(action.label) { monitor.perform(action) }
+                        .buttonStyle(.borderedProminent).tint(monitor.verdict.worst.tint)
+                }
+            }
+            let others = Array(monitor.verdict.stories.dropFirst())
+            if !others.isEmpty {
+                Divider()
+                ForEach(others) { story in
+                    Button { open(story) } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Also: \(story.phrase)").font(.callout.weight(.medium))
+                            if let because = story.because {
+                                Text(because).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             Divider()
             Button {
-                showMainWindow()
+                if let top { open(top) } else { showMainWindow() }
             } label: {
-                Label("Open Whirr…", systemImage: "macwindow")
+                Label(top == nil ? "Open Whirr…" : "Open Whirr → see why", systemImage: "macwindow")
             }
             .buttonStyle(.borderless)
             .keyboardShortcut("o")
@@ -44,23 +68,21 @@ struct MenuPopoverView: View {
             .controlSize(.small)
         }
         .padding(14)
-        .frame(width: 300)
+        .frame(width: 320)
     }
 
     private var headline: String {
         guard monitor.hasSampledYet else { return "Checking…" }
-        if let headline = monitor.verdict.headline { return headline.diagnosis.title }
-        return monitor.verdict.pending.isEmpty ? "Everything's running smoothly" : "Keeping an eye on something…"
+        if let sentence = monitor.verdict.sentence { return sentence }
+        if let pending = monitor.verdict.pendingStories.first {
+            return "Keeping an eye on something — \(pending.phrase)."
+        }
+        return "All good right now."
     }
 
-    private var detail: String? {
-        guard monitor.hasSampledYet else { return nil }
-        guard monitor.verdict.headline != nil else {
-            return monitor.verdict.pending.isEmpty ? nil
-                : "Something just changed. Whirr waits a couple of minutes before raising it, so brief blips stay quiet."
-        }
-        let more = monitor.verdict.also.count
-        return more > 0 ? "Plus \(more) more — open Whirr for details." : nil
+    private func open(_ story: Story) {
+        monitor.nav.openStory(story)
+        showMainWindow()
     }
 
     private func showMainWindow() {

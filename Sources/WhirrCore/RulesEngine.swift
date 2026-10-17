@@ -502,11 +502,16 @@ struct RunawayProcessRule: Rule {
     /// rules that also read these can stay pointed at one source of truth
     /// when running with the default config.
     static let minSustainedSamples = 5
+    /// The config counts samples at the daemon's 3-second cadence; the
+    /// rule judges elapsed time, so 5 samples always means 15 seconds and
+    /// 20 always means a minute, whatever the sampling interval.
+    static let configSecondsPerSample = 3.0
+    static func seconds(_ samples: Int) -> Double { Double(samples) * configSecondsPerSample }
     static let extendedSustainedSamples = 20
 
     func evaluate(_ ctx: CoreContext) -> Diagnosis? {
         let sustained = ctx.processes
-            .filter { $0.sustainedHighCpuSamples >= config.minSustainedSamples }
+            .filter { Double($0.sustainedHighCpuSamples) * ctx.secondsPerSample >= Self.seconds(config.minSustainedSamples) }
             .sorted { $0.cpuPercent > $1.cpuPercent }
         guard let worst = sustained.first else { return nil }
 
@@ -514,7 +519,8 @@ struct RunawayProcessRule: Rule {
         let identity = displayCommandLine(for: worst, friendly: friendly)
         let durationSeconds = Int((Double(worst.sustainedHighCpuSamples) * ctx.secondsPerSample).rounded())
         let severity: Severity =
-            (worst.cpuPercent >= 200 || worst.sustainedHighCpuSamples >= config.extendedSustainedSamples)
+            (worst.cpuPercent >= 200
+                || Double(worst.sustainedHighCpuSamples) * ctx.secondsPerSample >= Self.seconds(config.extendedSustainedSamples))
             ? .critical : .warning
         return Diagnosis(
             title: "\(friendly) has been pegging CPU",
@@ -871,7 +877,8 @@ struct SpotlightReindexNarrative: NarrativeRule {
         let activeIOBytes = UInt64(config.activeIOMBs * 1_048_576)
         let mds = ctx.processes.filter { Self.mdsNames.contains($0.name) }
         let active = mds.filter {
-            $0.sustainedHighCpuSamples >= RunawayProcessRule.minSustainedSamples
+            Double($0.sustainedHighCpuSamples) * ctx.secondsPerSample
+                >= RunawayProcessRule.seconds(RunawayProcessRule.minSustainedSamples)
                 || $0.diskIOBytesPerSec >= activeIOBytes
         }
         guard !active.isEmpty else { return nil }
@@ -992,7 +999,9 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
         let candidates = ctx.processes
             .filter {
                 $0.memoryBytes >= floorBytes
-                && $0.sustainedIdleSamples >= config.minIdleSamples
+                // Idle *time*, so 100 samples means 5 minutes at any interval.
+                && Double($0.sustainedIdleSamples) * ctx.secondsPerSample
+                    >= RunawayProcessRule.seconds(config.minIdleSamples)
                 // Exempt apps the user has recently focused. CPU-idle
                 // ≠ unused for GUI apps: a browser sitting on a static
                 // page reads as idle even though the user is reading

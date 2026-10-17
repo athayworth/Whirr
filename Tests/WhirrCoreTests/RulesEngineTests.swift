@@ -975,6 +975,29 @@ final class RulesEngineTests: XCTestCase {
             XCTAssertNotNil(d?.impact, d?.title ?? "nil")
         }
     }
+
+    func testRunawayThresholdsAreTimeNotSampleCounts() {
+        // At 1-second sampling, 20 samples is 20 seconds — not the minute
+        // that "extended" means at the 3-second default.
+        let short = engine.evaluate(snapshot: snapshot(), processes: [process(name: "bz", cpu: 96, sustained: 20)],
+                                    secondsPerSample: 1)
+        XCTAssertEqual(short.first { $0.title.hasSuffix(DiagnosisTitles.runawaySuffix) }?.severity, .warning)
+        let long = engine.evaluate(snapshot: snapshot(), processes: [process(name: "bz", cpu: 96, sustained: 60)],
+                                   secondsPerSample: 1)
+        XCTAssertEqual(long.first { $0.title.hasSuffix(DiagnosisTitles.runawaySuffix) }?.severity, .critical)
+        let tooBrief = engine.evaluate(snapshot: snapshot(), processes: [process(name: "bz", cpu: 96, sustained: 5)],
+                                       secondsPerSample: 1)
+        XCTAssertNil(tooBrief.first { $0.title.hasSuffix(DiagnosisTitles.runawaySuffix) }, "5 s isn't sustained")
+    }
+
+    func testIdleNeedsFiveMinutesWhateverTheSamplingInterval() {
+        // 150 idle samples at 1 s is 2.5 minutes — not idle long enough.
+        let procs = [process(pid: 1, name: "BigIdle", mem: 3 * .gb, idle: 150)]
+        XCTAssertNil(engine.evaluate(snapshot: snapshot(), processes: procs, secondsPerSample: 1)
+                        .first { $0.title == DiagnosisTitles.idleHogs })
+        XCTAssertNotNil(engine.evaluate(snapshot: snapshot(), processes: procs, secondsPerSample: 3)
+                           .first { $0.title == DiagnosisTitles.idleHogs })
+    }
 }
 
 private extension UInt64 {
