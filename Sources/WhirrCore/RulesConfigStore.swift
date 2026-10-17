@@ -39,7 +39,7 @@ public struct RulesConfigStore: Sendable {
             return (.default, .malformed("could not read file"))
         }
         do {
-            let decoded = try JSONDecoder().decode(RulesConfig.self, from: data)
+            let decoded = try JSONDecoder().decode(RulesConfig.self, from: Self.droppingRetiredDefaults(data))
             guard decoded.formatVersion == RulesConfig.currentFormatVersion else {
                 return (.default, .versionMismatch(actual: decoded.formatVersion))
             }
@@ -47,6 +47,32 @@ public struct RulesConfigStore: Sendable {
         } catch {
             return (.default, .malformed(error.localizedDescription))
         }
+    }
+
+    /// Sections whose values exactly match a default Whirr has since
+    /// corrected. "Write defaults" copies every default into the file, so
+    /// without this a months-old snapshot would silently pin thresholds
+    /// that were changed because they produced false alarms. Values a
+    /// person actually edited never match and are kept.
+    static let retiredDefaults: [String: [[String: Double]]] = [
+        // Disk busy: critical was 200 then 800 MB/s; modern SSDs pass that
+        // during an ordinary file copy.
+        "highDiskIO": [["warningMBs": 50, "criticalMBs": 200], ["warningMBs": 200, "criticalMBs": 800]],
+    ]
+
+    static func droppingRetiredDefaults(_ data: Data) -> Data {
+        guard var root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return data }
+        var changed = false
+        for (section, olds) in retiredDefaults {
+            guard let values = root[section] as? [String: Any] else { continue }
+            let numbers = values.compactMapValues { ($0 as? NSNumber)?.doubleValue }
+            if olds.contains(where: { old in old.allSatisfy { numbers[$0.key] == $0.value } }) {
+                root[section] = nil
+                changed = true
+            }
+        }
+        guard changed, let rewritten = try? JSONSerialization.data(withJSONObject: root) else { return data }
+        return rewritten
     }
 
     /// Writes the embedded defaults pretty-printed to disk so the user

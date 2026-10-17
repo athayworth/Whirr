@@ -94,3 +94,26 @@ final class RulesConfigStoreTests: XCTestCase {
         XCTAssertTrue(asString.contains("\n  "), "Expected pretty-printed JSON, got: \(asString.prefix(80))")
     }
 }
+
+extension RulesConfigStoreTests {
+    func testOldDefaultsSavedInAFileDoNotPinRetiredThresholds() throws {
+        // A rules.json written by "write defaults" in June holds the old
+        // defaults verbatim; they must not block today's corrections.
+        let json = """
+        { "formatVersion": 1, "highDiskIO": { "enabled": true, "warningMBs": 50, "criticalMBs": 200 } }
+        """
+        try json.data(using: .utf8)!.write(to: URL(fileURLWithPath: path))
+        let (loaded, result) = RulesConfigStore(path: path).load()
+        XCTAssertEqual(result, .loaded)
+        XCTAssertEqual(loaded.highDiskIO, HighDiskIORuleConfig())
+    }
+
+    func testGenuinelyCustomisedThresholdsAreKept() throws {
+        let json = """
+        { "formatVersion": 1, "highDiskIO": { "enabled": true, "warningMBs": 100, "criticalMBs": 400 } }
+        """
+        try json.data(using: .utf8)!.write(to: URL(fileURLWithPath: path))
+        let (loaded, _) = RulesConfigStore(path: path).load()
+        XCTAssertEqual(loaded.highDiskIO.criticalMBs, 400)
+    }
+}
