@@ -12,6 +12,10 @@ public struct DiagnosisIncident: Codable, Sendable, Hashable, Identifiable {
     public let firstSeenAt: Date
     public let lastSeenAt: Date
     public let culprits: [String]
+    /// Problem or note when it happened. Older log entries lack it and
+    /// are classified by title (see `legacyTier`).
+    public let tier: Diagnosis.Tier
+    public let area: Diagnosis.Area
 
     public var durationSeconds: Int {
         max(0, Int(lastSeenAt.timeIntervalSince(firstSeenAt)))
@@ -23,7 +27,9 @@ public struct DiagnosisIncident: Codable, Sendable, Hashable, Identifiable {
         peakSeverity: Severity,
         firstSeenAt: Date,
         lastSeenAt: Date,
-        culprits: [String] = []
+        culprits: [String] = [],
+        tier: Diagnosis.Tier = .problem,
+        area: Diagnosis.Area = .mac
     ) {
         self.id = id
         self.title = title
@@ -31,6 +37,40 @@ public struct DiagnosisIncident: Codable, Sendable, Hashable, Identifiable {
         self.firstSeenAt = firstSeenAt
         self.lastSeenAt = lastSeenAt
         self.culprits = culprits
+        self.tier = tier
+        self.area = area
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, peakSeverity, firstSeenAt, lastSeenAt, culprits, tier, area
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        peakSeverity = try c.decode(Severity.self, forKey: .peakSeverity)
+        firstSeenAt = try c.decode(Date.self, forKey: .firstSeenAt)
+        lastSeenAt = try c.decode(Date.self, forKey: .lastSeenAt)
+        culprits = try c.decodeIfPresent([String].self, forKey: .culprits) ?? []
+        tier = try c.decodeIfPresent(Diagnosis.Tier.self, forKey: .tier) ?? Self.legacyTier(title)
+        area = try c.decodeIfPresent(Diagnosis.Area.self, forKey: .area) ?? Self.legacyArea(title)
+    }
+
+    /// Titles that were always notes. (A low-disk warning was a note too,
+    /// but old entries can't tell warning from critical, so it stays a
+    /// problem — rare, and still true.)
+    static func legacyTier(_ title: String) -> Diagnosis.Tier {
+        [DiagnosisTitles.swapVolumeOnly, DiagnosisTitles.idleHogs, DiagnosisTitles.dockerStrain].contains(title)
+            ? .note : .problem
+    }
+
+    static func legacyArea(_ title: String) -> Diagnosis.Area {
+        let connection = [ConnectionTitles.spikyWiFi, ConnectionTitles.pastRouter, ConnectionTitles.weakSignal,
+                          ConnectionTitles.outage, "Wi-Fi is spiky"]
+        if connection.contains(title) { return .connection }
+        if title == DiagnosisTitles.dockerStrain { return .developer }
+        return .mac
     }
 }
 

@@ -44,6 +44,7 @@ public struct DiagnosisDurationTracker {
         /// Problem vs note. A change of tier is a new incident: a note's
         /// time in the background doesn't count toward a problem's gates.
         var tier: Diagnosis.Tier
+        var area: Diagnosis.Area
         var culprits: [String]
         /// Last-observed severity that's at least `trendLookbackSeconds`
         /// stale. Filled the first time we see a sample that's old
@@ -93,7 +94,9 @@ public struct DiagnosisDurationTracker {
                 peakSeverity: state.peakSeverity,
                 firstSeenAt: state.firstSeenAt,
                 lastSeenAt: state.lastSeenAt,
-                culprits: state.culprits
+                culprits: state.culprits,
+                tier: state.tier,
+                area: state.area
             ))
         }
 
@@ -133,6 +136,7 @@ public struct DiagnosisDurationTracker {
                 lastSeverity: diagnosis.severity,
                 peakSeverity: diagnosis.severity,
                 tier: diagnosis.tier,
+                area: diagnosis.area,
                 culprits: diagnosis.culprits,
                 referenceSeverity: nil,
                 referenceCapturedAt: nil

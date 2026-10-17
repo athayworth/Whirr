@@ -36,6 +36,12 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
     public let area: Area
     /// The one fix the UI should offer, if any.
     public let action: SuggestedAction?
+    /// How Whirr knows: measured facts, with numbers, from the sample that
+    /// produced this finding. `evidence.first` is the short "because".
+    /// Empty = nothing measured to show (the UI hides "Why?").
+    public let evidence: [String]
+    /// Why it matters to the person, phrased as general knowledge.
+    public let impact: String?
 
     public init(
         title: String,
@@ -46,15 +52,19 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
         subsumes: [String] = [],
         tier: Tier = .problem,
         area: Area = .mac,
-        action: SuggestedAction? = nil
+        action: SuggestedAction? = nil,
+        evidence: [String] = [],
+        impact: String? = nil
     ) {
         self.init(id: UUID(), title: title, detail: detail, severity: severity, culprits: culprits,
-                  kind: kind, subsumes: subsumes, tier: tier, area: area, action: action)
+                  kind: kind, subsumes: subsumes, tier: tier, area: area, action: action,
+                  evidence: evidence, impact: impact)
     }
 
     private init(
         id: UUID, title: String, detail: String, severity: Severity, culprits: [String],
-        kind: Kind, subsumes: [String], tier: Tier, area: Area, action: SuggestedAction?
+        kind: Kind, subsumes: [String], tier: Tier, area: Area, action: SuggestedAction?,
+        evidence: [String], impact: String?
     ) {
         self.id = id
         self.title = title
@@ -66,19 +76,29 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
         self.tier = tier
         self.area = area
         self.action = action
+        self.evidence = evidence
+        self.impact = impact
     }
 
     /// Same finding (same `id`) with presentation fields replaced.
     public func classified(tier: Tier, area: Area, action: SuggestedAction?) -> Diagnosis {
         Diagnosis(id: id, title: title, detail: detail, severity: severity, culprits: culprits,
-                  kind: kind, subsumes: subsumes, tier: tier, area: area, action: action)
+                  kind: kind, subsumes: subsumes, tier: tier, area: area, action: action,
+                  evidence: evidence, impact: impact)
+    }
+
+    /// Same finding (same `id`) with its "why" attached.
+    public func explained(evidence: [String], impact: String?) -> Diagnosis {
+        Diagnosis(id: id, title: title, detail: detail, severity: severity, culprits: culprits,
+                  kind: kind, subsumes: subsumes, tier: tier, area: area, action: action,
+                  evidence: evidence, impact: impact)
     }
 
     // Backward-compatible decoding for daemon payloads written before
     // `subsumes` existed — missing key decodes to []. Wire format
     // version is not bumped for the additive change.
     private enum CodingKeys: String, CodingKey {
-        case id, title, detail, severity, culprits, kind, subsumes, tier, area, action
+        case id, title, detail, severity, culprits, kind, subsumes, tier, area, action, evidence, impact
     }
 
     public init(from decoder: Decoder) throws {
@@ -93,6 +113,8 @@ public struct Diagnosis: Identifiable, Hashable, Sendable, Codable {
         self.tier = try c.decodeIfPresent(Tier.self, forKey: .tier) ?? .problem
         self.area = try c.decodeIfPresent(Area.self, forKey: .area) ?? .mac
         self.action = try c.decodeIfPresent(SuggestedAction.self, forKey: .action)
+        self.evidence = try c.decodeIfPresent([String].self, forKey: .evidence) ?? []
+        self.impact = try c.decodeIfPresent(String.self, forKey: .impact)
     }
 }
 
