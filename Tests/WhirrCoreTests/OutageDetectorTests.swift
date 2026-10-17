@@ -124,3 +124,33 @@ final class OutageDetectorTests: XCTestCase {
         XCTAssertEqual(opened?.cause, .unknown)
     }
 }
+
+final class OutageRecordProvenanceTests: XCTestCase {
+    func testNewOutagesUseTheCurrentCauseMethod() {
+        var d = OutageDetector()
+        var opened: OutageRecord?
+        for i in 0...6 {
+            opened = opened ?? d.observe(gatewayOK: true, internetOK: false, wifiAssociated: true,
+                                         at: Date(timeIntervalSince1970: 1_800_000_000 + Double(i) * 2), networkId: "home").opened
+        }
+        XCTAssertEqual(opened?.causeMethod, OutageRecord.currentCauseMethod)
+        XCTAssertTrue(opened?.causeIsReliable ?? false)
+    }
+
+    func testOutagesSavedBeforeTheMethodExistedAreMarkedOlder() throws {
+        let json = #"[{"id":"7E3F1C2A-1111-4222-8333-444455556666","start":"2026-10-15T06:16:39Z","end":"2026-10-15T06:17:09Z","cause":"router","networkId":"home"}]"#
+        let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
+        let old = try d.decode([OutageRecord].self, from: Data(json.utf8))
+        XCTAssertFalse(old[0].causeIsReliable)
+    }
+
+    func testProviderSummaryOnlyCountsReliableCausesAndSaysSo() {
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        let old = OutageRecord(start: t, end: t.addingTimeInterval(30), cause: .isp, networkId: "h", causeMethod: 1)
+        let new = OutageRecord(start: t.addingTimeInterval(600), end: t.addingTimeInterval(660), cause: .isp, networkId: "h")
+        let text = OutageReport.summary([old, new], now: t.addingTimeInterval(3600))
+        XCTAssertTrue(text.contains("2"), text)
+        XCTAssertTrue(text.contains("1 where the home router still answered"), text)
+        XCTAssertTrue(text.contains("older version"), text)
+    }
+}

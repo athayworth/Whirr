@@ -73,7 +73,7 @@ struct OutageList: View {
                 ForEach(recent) { o in
                     HStack {
                         Text(o.start.formatted(date: .abbreviated, time: .shortened)).monospacedDigit()
-                        Text(OutageText.cause(o.cause)).foregroundStyle(.secondary)
+                        Text(OutageText.cause(o)).foregroundStyle(.secondary)
                         Spacer()
                         Text(OutageText.duration(o)).monospacedDigit().foregroundStyle(.secondary)
                     }
@@ -85,31 +85,8 @@ struct OutageList: View {
 }
 
 enum OutageText {
-    static func cause(_ c: OutageCause) -> String {
-        switch c {
-        case .router: return "Router stopped responding"
-        case .isp: return "Down beyond the router (router answered)"
-        case .wifiDisconnected: return "Wi-Fi disconnected"
-        case .unknown: return "Connection down (cause unclear)"
-        }
-    }
-
-    static func duration(_ o: OutageRecord) -> String {
-        guard let d = o.duration else { return "ongoing" }
-        return MenuFormat.duration(seconds: Int(d))
-    }
-
+    static func cause(_ o: OutageRecord) -> String { OutageReport.cause(o) }
+    static func duration(_ o: OutageRecord) -> String { OutageReport.duration(o) }
     /// Plain text to paste into a chat or email with the provider.
-    static func summary(_ outages: [OutageRecord]) -> String {
-        let recent = outages.filter { $0.start > Date().addingTimeInterval(-30 * 86_400) }.sorted { $0.start < $1.start }
-        let lines = recent.map { "• \($0.start.formatted(date: .abbreviated, time: .shortened)) — \(cause($0.cause)), \(duration($0))" }
-        let isp = recent.filter { $0.cause == .isp }.count
-        return """
-        Connection outages in the last 30 days: \(recent.count) (\(isp) where the home router still answered but nothing beyond it did).
-
-        \(lines.joined(separator: "\n"))
-
-        Recorded automatically by Whirr, which checks the home router and two internet servers (1.1.1.1 and 8.8.8.8) every 2 seconds.
-        """
-    }
+    static func summary(_ outages: [OutageRecord]) -> String { OutageReport.summary(outages) }
 }

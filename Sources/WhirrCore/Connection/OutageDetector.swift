@@ -19,14 +19,36 @@ public struct OutageRecord: Codable, Sendable, Equatable, Identifiable {
     public var end: Date?
     public let cause: OutageCause
     public let networkId: String
+    /// How the cause was decided. 1 = a single round's ping (before
+    /// 2026-10-17); 2 = clear majority over the failing window, with two
+    /// internet hosts. Older causes are shown as less reliable.
+    public let causeMethod: Int
 
-    public init(id: UUID = UUID(), start: Date, end: Date? = nil, cause: OutageCause, networkId: String) {
+    public static let currentCauseMethod = 2
+
+    public init(id: UUID = UUID(), start: Date, end: Date? = nil, cause: OutageCause, networkId: String,
+                causeMethod: Int = OutageRecord.currentCauseMethod) {
         self.id = id
         self.start = start
         self.end = end
         self.cause = cause
         self.networkId = networkId
+        self.causeMethod = causeMethod
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        start = try c.decode(Date.self, forKey: .start)
+        end = try c.decodeIfPresent(Date.self, forKey: .end)
+        cause = try c.decode(OutageCause.self, forKey: .cause)
+        networkId = try c.decode(String.self, forKey: .networkId)
+        causeMethod = try c.decodeIfPresent(Int.self, forKey: .causeMethod) ?? 1
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, start, end, cause, networkId, causeMethod }
+
+    public var causeIsReliable: Bool { causeMethod >= Self.currentCauseMethod }
 
     public var duration: TimeInterval? { end.map { $0.timeIntervalSince(start) } }
 }
