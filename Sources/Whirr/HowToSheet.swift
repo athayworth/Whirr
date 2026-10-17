@@ -60,7 +60,7 @@ struct HowToContent {
                 title: "Change your router's Wi-Fi channel",
                 intro: "Wi-Fi networks on the same stretch of airwaves take turns talking. If the connection test showed your Wi-Fi having trouble and your stretch is crowded, moving to a quieter one can help.",
                 steps: [
-                    "Open your internet provider's app or website (for example the Optimum app, or optimum.net → My network) and find the router or Wi-Fi settings. Or, on a device on your home Wi-Fi, visit \(router) in a web browser.",
+                    "On a device on your home Wi-Fi, visit \(router) in a web browser. If that sends you to your internet provider, use their app or account website instead — router settings are often under a name like My network or Wi-Fi.",
                     "Find the 5 GHz channel setting — often under Wi-Fi, Wireless, or Advanced. Automatic mode may be called \"Select best channel automatically\" or Smart WiFi.",
                     "Choose a channel the connection test listed as quiet. Go by stretch, not just number: at 80 MHz, channel 40 shares the airwaves of channels 36–48.",
                     "Save. Devices reconnect on their own within a minute."
