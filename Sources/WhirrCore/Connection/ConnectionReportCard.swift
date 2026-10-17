@@ -60,16 +60,21 @@ public enum ConnectionReportCard {
             return row(.unknown, "Whirr hadn't been watching long enough before this test to judge stability.")
         }
         if g == .minor || g == .stalling {
-            let link = before.isWired ? "Your Mac's wired link to the router" : "Your Mac's Wi-Fi link to the router"
+            let link = before.isWired ? "The wired link between your Mac and the router" : "The link between your Mac and the router"
+            var explanation = "\(link) stalled \(before.gateway.spikes) times in the 10 minutes before the test."
+            // Don't let a few router-hop stalls hide many more beyond it.
+            if i.isWorse(than: g) {
+                explanation += " The connection beyond the router stalled \(before.internet.spikes) times."
+            }
             let fix: String
             if before.isWired {
                 fix = "Check the cable and the router."
             } else if let l = r.link, isWeak(l) {
                 fix = "Your signal was weak during the test (\(l.snr) dB above background noise). Improving it is the first thing to try."
             } else {
-                fix = "Common causes are a crowded channel, a weak signal, or interference. The Wi-Fi crowding row below shows how busy your channel was."
+                fix = "Stalls here are inside your home: Wi-Fi, this Mac, or the router. Common causes on Wi-Fi are a crowded channel, a weak signal, or interference — the Wi-Fi crowding row below shows how busy your channel was."
             }
-            return row(grade(g), "\(link) stalled \(before.gateway.spikes) times in the 10 minutes before the test.", fix)
+            return row(grade(i.isWorse(than: g) ? i : g), explanation, fix)
         }
         if i == .minor || i == .stalling {
             guard g == .steady else {
@@ -163,21 +168,31 @@ public enum ConnectionReportCard {
         let loud = sharing.filter { $0.rssi >= loudRssi }.count
         let grade: Grade = loud <= 2 ? .good : loud <= 5 ? .ok : .poor
         let n = sharing.count
-        var explanation = "During the test, Whirr heard \(n) Wi-Fi network\(n == 1 ? "" : "s") using the same stretch of airwaves as yours (\(link.band) \(mine.label)), including yours. \(loud) \(loud == 1 ? "was" : "were") strong enough to make your router wait its turn. One router can broadcast more than one network, and a single scan can miss some."
+        var explanation = "During the test, Whirr heard \(n) Wi-Fi network\(n == 1 ? "" : "s") using the same stretch of airwaves as yours (\(link.band) \(mine.label)), including yours. \(loud) \(loud == 1 ? "was" : "were") loud enough at your Mac to compete for airtime (counting yours). One router can broadcast more than one network, and a single scan can miss some."
         guard grade != .good else { return row(grade, explanation) }
 
-        guard wifiWasTroubled(r) else {
-            explanation += " Your Wi-Fi link to the router was steady around this test, so this crowding wasn't causing problems."
+        switch routerLinkEvidence(r) {
+        case .steady:
+            explanation += " The link between your Mac and the router was steady before this test, so this crowding wasn't causing problems."
             return row(grade, explanation)
+        case .unknown:
+            explanation += " Whirr couldn't check the link between your Mac and the router around this test, so it can't say whether this crowding was causing problems."
+            return row(grade, explanation)
+        case .troubled:
+            return row(grade, explanation, quieterStretches(neighbors: neighbors, mine: mine, myLoud: loud))
         }
-        return row(grade, explanation, quieterStretches(neighbors: neighbors, mine: mine, myLoud: loud))
     }
 
-    /// Evidence that the Wi-Fi side had trouble: router-hop stalls before
-    /// the test, or the router hop carrying the delay under load.
-    static func wifiWasTroubled(_ r: ConnectionTestResult) -> Bool {
-        if let b = r.before, b.gatewayPingable, [.minor, .stalling].contains(HopHealth(b.gateway)) { return true }
-        return underLoad(r).grade != .good && loadSide(r) == .insideHome
+    enum RouterLinkEvidence { case troubled, steady, unknown }
+
+    /// What the test (and the 10 minutes before it) showed about the link
+    /// between the Mac and the router. "Steady" needs a measured, clean
+    /// router hop — never assumed from missing data.
+    static func routerLinkEvidence(_ r: ConnectionTestResult) -> RouterLinkEvidence {
+        let health = r.before.flatMap { $0.gatewayPingable ? HopHealth($0.gateway) : nil }
+        if health == .minor || health == .stalling { return .troubled }
+        if underLoad(r).grade != .good && loadSide(r) == .insideHome { return .troubled }
+        return health == .steady ? .steady : .unknown
     }
 
     private static func quieterStretches(neighbors: [NeighborNetwork], mine: ChannelBlock, myLoud: Int) -> String {
@@ -187,8 +202,12 @@ public enum ConnectionReportCard {
         // "Quieter" means at most half as many loud networks as yours has
         // besides your own — a one-network difference is scan noise.
         let others = max(0, myLoud - 1)
-        let options = WiFiSpectrum.candidateBlocks(band: mine.band, widthMHz: mine.widthMHz)
+        let alternatives = WiFiSpectrum.candidateBlocks(band: mine.band, widthMHz: mine.widthMHz)
             .filter { !WiFiSpectrum.overlaps($0, mine) }
+        guard !alternatives.isEmpty else {
+            return "The link to your router had trouble, but Whirr can't compare other channels for \(mine.band) at this width, so it has no channel to suggest."
+        }
+        let options = alternatives
             .map { (block: $0, loud: loudCount($0)) }
             .filter { $0.loud * 2 <= others }
             .sorted { ($0.loud, $0.block.isRadarShared ? 1 : 0, $0.block.channels.lowerBound)
@@ -201,9 +220,9 @@ public enum ConnectionReportCard {
             let where_ = o.block.channels.count > 1 ? " (\(o.block.label))" : ""
             return "channel \(o.block.channels.lowerBound)\(where_), \(o.loud) strong network\(o.loud == 1 ? "" : "s") heard"
         }.joined(separator: "; or ")
-        var fix = "Your Wi-Fi had trouble, so if your router lets you choose a channel, pick a quieter stretch: \(list)."
+        var fix = "The link to your router had trouble, so if your router lets you choose a channel, a quieter stretch may help: \(list)."
         if options.contains(where: { $0.block.isRadarShared }) {
-            fix += " Channels 52–144 are shared with radar: if the router detects radar it has to move, dropping Wi-Fi for a minute or more."
+            fix += " Channels 52–144 are shared with radar: if the router detects radar it has to move, which can drop Wi-Fi for a minute or more."
         }
         return fix
     }

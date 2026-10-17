@@ -215,4 +215,45 @@ final class ConnectionReportCardTests: XCTestCase {
         XCTAssertNil(r.neighbors)
         XCTAssertNil(r.before)
     }
+
+    // MARK: Review fixes
+
+    func testCrowdingNeverClaimsSteadyWithoutRouterEvidence() {
+        let busy = [net(157), net(149), net(149), net(149), net(149), net(149)]
+        for b in [before(gateway: .empty, pingable: false), before(gateway: hop(count: 5))] {
+            let r = row("crowding", result(neighbors: busy, before: b))
+            XCTAssertFalse(r.explanation.contains("steady"), r.explanation)
+            XCTAssertTrue(r.explanation.contains("couldn't check"), r.explanation)
+        }
+        let old = row("crowding", result(neighbors: busy, before: .some(nil)))
+        XCTAssertFalse(old.explanation.contains("steady"), old.explanation)
+    }
+
+    func testNoChannelSuggestionWhenThereIsNothingToCompare() {
+        let six = WiFiLink(rssi: -55, noise: -90, channel: 37, band: "6 GHz", widthMHz: 160, txRateMbps: 1200, phyMode: "802.11ax")
+        let n = Array(repeating: net(37, 160, band: "6 GHz"), count: 7)
+        let r = row("crowding", result(link: .some(six), neighbors: n, before: before(gateway: hop(spikes: 14))))
+        XCTAssertFalse(r.fix?.contains("about as busy") ?? false, r.fix ?? "")
+        XCTAssertTrue(r.fix?.contains("can't compare") ?? false, r.fix ?? "")
+    }
+
+    func testStabilityReportsInternetStallsEvenWhenTheRouterHopHadAFew() {
+        let r = row("stability", result(before: before(gateway: hop(spikes: 4), internet: hop(spikes: 30))))
+        XCTAssertEqual(r.grade, .poor)
+        XCTAssertTrue(r.explanation.contains("30"), r.explanation)
+    }
+
+    func testRouterHopStallsAreNotAttributedToWiFiAlone() {
+        let r = row("stability", result(before: before(gateway: hop(spikes: 14))))
+        XCTAssertFalse(r.explanation.contains("Wi-Fi link"), r.explanation)
+        XCTAssertTrue(r.explanation.contains("between your Mac and the router"), r.explanation)
+    }
+
+    func testCrowdingWordingIsMeasuredAtTheMacAndHedgesRadar() {
+        let busy = [net(157), net(149), net(149), net(149), net(149), net(149), net(36)]
+        let r = row("crowding", result(neighbors: busy, before: before(gateway: hop(spikes: 14))))
+        XCTAssertTrue(r.explanation.contains("at your Mac"), r.explanation)
+        XCTAssertFalse(r.explanation.contains("make your router wait"), r.explanation)
+        XCTAssertTrue(r.fix?.contains("can drop") ?? false, r.fix ?? "")
+    }
 }

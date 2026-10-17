@@ -104,4 +104,16 @@ public enum HopHealth: Sendable, Equatable {
             self = .stalling
         }
     }
+
+    /// Ordered by how much trouble a hop showed; `.measuring` is lowest.
+    func isWorse(than other: HopHealth) -> Bool { rank > other.rank }
+
+    private var rank: Int {
+        switch self {
+        case .measuring: return 0
+        case .steady: return 1
+        case .minor: return 2
+        case .stalling: return 3
+        }
+    }
 }
