@@ -15,6 +15,9 @@ public struct DiagnosisChangeTracker {
 
     private var previousCriticalKeys: Set<String> = []
     private var cooldownUntil: [String: Date] = [:]
+    /// Titles we actually sent a notification for and haven't yet said
+    /// "resolved" about.
+    private var notifiedKeys: Set<String> = []
     private let cooldown: TimeInterval
 
     public init(cooldown: TimeInterval = DiagnosisChangeTracker.defaultCooldown) {
@@ -65,6 +68,7 @@ public struct DiagnosisChangeTracker {
             guard candidateKeys.contains(diag.title) else { continue }
             if let until = cooldownUntil[diag.title], until > now { continue }
             newlyFiring.append(diag)
+            notifiedKeys.insert(diag.title)
             cooldownUntil[diag.title] = now.addingTimeInterval(cooldown)
         }
 
@@ -93,5 +97,15 @@ public struct DiagnosisChangeTracker {
     public func newlyCleared(in diagnoses: [Diagnosis]) -> [String] {
         let currentKeys = Set(diagnoses.filter { $0.severity == .critical }.map(\.title))
         return previousCriticalKeys.subtracting(currentKeys).sorted()
+    }
+
+    /// Titles we notified about whose condition is now gone entirely.
+    /// `present` must hold every current finding's title — any severity,
+    /// snoozed or muted included — so a drop to warning, a snooze or a
+    /// mute never produces a false "resolved".
+    public mutating func resolved(present: Set<String>) -> [String] {
+        let gone = notifiedKeys.subtracting(present)
+        notifiedKeys.subtract(gone)
+        return gone.sorted()
     }
 }

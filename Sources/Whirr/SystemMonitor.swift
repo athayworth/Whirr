@@ -306,7 +306,7 @@ final class SystemMonitor {
         let notifiable = result.diagnosisContexts
             .filter { !isHidden($0.diagnosis.title) && VerdictSelector.shouldNotify($0) }
             .map(\.diagnosis)
-        notifications.process(notifiable)
+        notifications.process(notifiable, presentTitles: Set(result.diagnoses.map(\.title)))
     }
 }
 

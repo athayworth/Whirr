@@ -102,3 +102,32 @@ final class DiagnosisChangeTrackerTests: XCTestCase {
         XCTAssertEqual(second.map(\.title), ["B"])
     }
 }
+
+final class RecoveryNotificationTests: XCTestCase {
+    private func d(_ title: String, _ severity: Severity) -> Diagnosis {
+        Diagnosis(title: title, detail: "", severity: severity)
+    }
+
+    func testResolvedOnlyWhenTheConditionIsGoneEntirely() {
+        var t = DiagnosisChangeTracker()
+        _ = t.newlyCritical(in: [d("A", .critical)])
+        // Dropped to warning: still present, not resolved.
+        XCTAssertEqual(t.resolved(present: ["A"]), [])
+        // Gone from every list: resolved, once.
+        XCTAssertEqual(t.resolved(present: []), ["A"])
+        XCTAssertEqual(t.resolved(present: []), [])
+    }
+
+    func testSnoozedOrMutedIsNotResolved() {
+        // The caller passes every current title, hidden ones included.
+        var t = DiagnosisChangeTracker()
+        _ = t.newlyCritical(in: [d("A", .critical)])
+        _ = t.newlyCritical(in: [])  // filtered out of the notify list by snooze
+        XCTAssertEqual(t.resolved(present: ["A"]), [])
+    }
+
+    func testNeverNotifiedNeverResolves() {
+        var t = DiagnosisChangeTracker()
+        XCTAssertEqual(t.resolved(present: []), [])
+    }
+}

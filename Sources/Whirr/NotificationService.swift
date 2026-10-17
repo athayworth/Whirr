@@ -24,17 +24,16 @@ final class NotificationService {
         Task { await requestAuthorizationIfNeeded() }
     }
 
-    func process(_ diagnoses: [Diagnosis]) {
+    /// - Parameters:
+    ///   - diagnoses: findings that pass the notify gate.
+    ///   - presentTitles: every current finding's title, unfiltered, so
+    ///     "resolved" means the condition is really gone.
+    func process(_ diagnoses: [Diagnosis], presentTitles: Set<String>) {
         guard Preferences.notificationsEnabled else { return }
         rebuildTrackerIfCooldownChanged()
-        // Recovery pings look at the PRE-mutation state (titles that
-        // were critical last tick and aren't now), so we compute them
-        // BEFORE calling `newlyCritical` — which mutates
-        // previousCriticalKeys.
-        let clearedTitles = Preferences.notifyOnRecovery
-            ? tracker.newlyCleared(in: diagnoses)
-            : []
         let newlyCritical = tracker.newlyCritical(in: diagnoses)
+        let resolved = tracker.resolved(present: presentTitles)
+        let clearedTitles = Preferences.notifyOnRecovery ? resolved : []
         guard authorizationGranted else { return }
         for diagnosis in newlyCritical {
             post(diagnosis)
@@ -114,9 +113,8 @@ final class NotificationService {
     /// rather than two conflicting ones.
     private func postRecovery(title: String) {
         let content = UNMutableNotificationContent()
-        content.title = "Resolved: \(title)"
-        content.subtitle = "The condition has cleared."
-        content.body = "Whirr will keep watching — you're safe to keep going."
+        content.title = "Cleared: \(title)"
+        content.body = "Whirr no longer sees this. It will tell you if it comes back."
         content.sound = nil  // recovery is not urgent — silent
         content.interruptionLevel = .active
         content.threadIdentifier = title
