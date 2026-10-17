@@ -943,6 +943,38 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertTrue(r?.evidence.contains { $0.contains("29168") } ?? false)
         XCTAssertTrue(r?.detail.contains("1 min") ?? false, r?.detail ?? "")  // 20 × 3 s
     }
+
+    func testNarrativesExplainFromTheirInputs() {
+        func first(_ title: String, _ snap: SystemSnapshot, _ procs: [ProcessSample]) -> Diagnosis? {
+            engine.evaluate(snapshot: snap, processes: procs).first { $0.title == title }
+        }
+        let docker = first(DiagnosisTitles.dockerMajorLoad, snapshot(used: 14 * .gb, available: 2 * .gb),
+                           [process(pid: 1, name: "com.docker.backend", mem: 1 * .gb),
+                            process(pid: 2, name: "com.apple.Virtualization.Virtua", mem: 8 * .gb)])
+        EvidenceAccuracy.assertAllNumbers(docker, from: [9, 0, 2, 56, 56.25])
+        let backup = first("Backup is competing with your apps", snapshot(pressure: .warning),
+                           [process(name: "bztransmit", cpu: 40, readBps: 12 * .mb)])
+        EvidenceAccuracy.assertAllNumbers(backup, from: [12, 40, 8])
+        let spiral = first("Memory + swap death spiral", snapshot(pressure: .critical, swap: 6 * .gb, swapInsPerSec: 1500),
+                           [process(name: "Xcode", mem: 5 * .gb)])
+        EvidenceAccuracy.assertAllNumbers(spiral, from: [8, 1500, 6, 5])
+        let ws = first("Graphics is working hard", snapshot(), [process(name: "WindowServer", cpu: 130)])
+        EvidenceAccuracy.assertAllNumbers(ws, from: [130])
+        let leak = first("node memory has been growing", snapshot(),
+                         [process(name: "node", mem: 6 * .gb, memDelta: Int64(3 * UInt64.gb))])
+        EvidenceAccuracy.assertAllNumbers(leak, from: [3, 6, 10])
+        let spot = first("Spotlight is indexing", snapshot(), [process(name: "mds_stores", readBps: 30 * .mb)])
+        EvidenceAccuracy.assertAllNumbers(spot, from: [30])
+        let hot = first("Heavy work while your Mac is hot", snapshot(thermal: .serious),
+                        [process(name: "node", cpu: 150, sustained: 5)])
+        EvidenceAccuracy.assertAllNumbers(hot, from: [150, 15, 60, 1])
+        let contention = first("Heavy disk use while memory is tight", snapshot(pressure: .warning),
+                               [process(name: "Photos", readBps: 300 * .mb)])
+        EvidenceAccuracy.assertAllNumbers(contention, from: [300, 8])
+        for d in [docker, backup, spiral, ws, leak, spot, hot, contention] {
+            XCTAssertNotNil(d?.impact, d?.title ?? "nil")
+        }
+    }
 }
 
 private extension UInt64 {

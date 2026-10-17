@@ -588,6 +588,9 @@ struct BackupChokingForegroundNarrative: NarrativeRule {
             // Backup + the secondary signals it references are already
             // named in the detail line; hide their standalones.
             subsumes: [DiagnosisTitles.backupUsing] + secondarySignals.map(\.title)
+        ).explained(
+            evidence: backup.evidence + secondarySignals.flatMap(\.evidence),
+            impact: "A backup and your apps compete for the same disk and memory."
         )
     }
 }
@@ -613,6 +616,9 @@ struct ThermalThrottleAmplifierNarrative: NarrativeRule {
             severity: thermal.severity,
             culprits: runaway.culprits,
             kind: .narrative
+        ).explained(
+            evidence: thermal.evidence + runaway.evidence.prefix(2),
+            impact: "Heavy work adds heat, and heat makes the Mac slow its processor."
         )
     }
 }
@@ -652,6 +658,9 @@ struct DiskMemoryContentionNarrative: NarrativeRule {
             // (disk-busy process + memory pressure). Suppress the
             // duplicates.
             subsumes: [DiagnosisTitles.diskBusy, DiagnosisTitles.memoryTight, DiagnosisTitles.memorySaturated]
+        ).explained(
+            evidence: disk.evidence + memoryTight.evidence,
+            impact: "When memory runs short macOS swaps to the same drive, so both slow down."
         )
     }
 }
@@ -698,6 +707,10 @@ struct MemorySwapSpiralNarrative: NarrativeRule {
             // paging" — surfacing the two underlying standalone rows
             // beneath it triples the count without adding information.
             subsumes: [DiagnosisTitles.memorySaturated, DiagnosisTitles.swapActivelyPaging]
+        ).explained(
+            evidence: (saturated?.evidence ?? []) + (activelyPaging?.evidence.prefix(2) ?? [])
+                + (topMemoryHog.map { ["Biggest memory user: \(ctx.describer($0)) at \(formatBytes($0.memoryBytes))"] } ?? []),
+            impact: "Swapping makes apps slower, and slower apps hold memory longer — it feeds itself until memory is freed."
         )
     }
 }
@@ -731,6 +744,9 @@ struct WindowServerHogNarrative: NarrativeRule {
             severity: .warning,
             culprits: ["WindowServer"],
             kind: .narrative
+        ).explained(
+            evidence: [String(format: "WindowServer CPU: %.0f%%", ws.cpuPercent)],
+            impact: "WindowServer draws the screen; when it's busy, scrolling and animations can stutter."
         )
     }
 }
@@ -813,6 +829,15 @@ struct DockerStrainNarrative: NarrativeRule {
             severity: severity,
             culprits: dockerProcs.map(\.name),
             kind: .narrative
+        ).explained(
+            evidence: [String(format: "Docker and its virtual machine: %.1f GB memory, %.0f%% CPU across %d processes",
+                              memoryGB, totalCPU, dockerProcs.count),
+                       ctx.seesAllProcesses
+                           ? String(format: "Share of this Mac: %.0f%% of memory, %.0f%% of all CPU in use", memoryShare * 100, cpuShare * 100)
+                           : String(format: "Share of this Mac: %.0f%% of memory", memoryShare * 100)]
+                + (ctx.dockerContainers.max(by: { $0.memoryBytes < $1.memoryBytes }).map {
+                    ["Heaviest container: \($0.name) at \(formatBytes($0.memoryBytes))"] } ?? []),
+            impact: "Docker's virtual machine holds its memory and CPU even while containers sit idle."
         )
     }
 
@@ -873,6 +898,10 @@ struct SpotlightReindexNarrative: NarrativeRule {
             severity: .warning,
             culprits: active.map(\.name),
             kind: .narrative
+        ).explained(
+            evidence: [totalIO >= activeIOBytes ? "\(who): reading \(formatMBps(totalIO)) from disk"
+                                                : String(format: "%@: %.0f%% CPU", who, totalCPU)],
+            impact: "Indexing uses disk and CPU until it finishes."
         )
     }
 }
@@ -931,6 +960,9 @@ struct MemoryLeakNarrative: NarrativeRule {
             severity: .warning,
             culprits: [name],
             kind: .narrative
+        ).explained(
+            evidence: [String(format: "%@: from %.1f GB to %.1f GB within the last %d minutes", name, formerGB, currentGB, windowMinutes)],
+            impact: "Memory an app keeps growing is memory nothing else can use."
         )
     }
 }
@@ -999,6 +1031,9 @@ struct IdleMemoryHogsNarrative: NarrativeRule {
             severity: .ok,
             culprits: candidates.map { ctx.describer($0) },
             kind: .narrative
+        ).explained(
+            evidence: pieces + ["Longest idle: \(DurationText.words(seconds: longestIdleMinutes * 60))"],
+            impact: nil
         )
     }
 
