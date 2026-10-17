@@ -22,6 +22,10 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Optional: macOS only shares Wi-Fi network names with apps that have Location access. Whirr uses them to tell your network apart from your neighbours' in the connection test. It never uses your location or stores network names.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Optional: macOS only shares Wi-Fi network names with apps that have Location access. Whirr uses them to tell your network apart from your neighbours' in the connection test. It never uses your location or stores network names.</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHumanReadableCopyright</key>

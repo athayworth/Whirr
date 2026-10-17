@@ -101,3 +101,13 @@ final class WiFiSpectrumTests: XCTestCase {
         XCTAssertNotEqual(block("5 GHz", 149, 80), block("5 GHz", 149, 40))
     }
 }
+
+final class OwnNetworkMatchingTests: XCTestCase {
+    func testOwnershipNeedsOurOwnNameFirst() {
+        XCTAssertNil(CoreWLANReader.isYours(network: "Neighbor", mine: nil))
+        XCTAssertNil(CoreWLANReader.isYours(network: nil, mine: nil))
+        XCTAssertEqual(CoreWLANReader.isYours(network: "Home", mine: "Home"), true)
+        XCTAssertEqual(CoreWLANReader.isYours(network: "Neighbor", mine: "Home"), false)
+        XCTAssertEqual(CoreWLANReader.isYours(network: nil, mine: "Home"), false, "hidden network")
+    }
+}

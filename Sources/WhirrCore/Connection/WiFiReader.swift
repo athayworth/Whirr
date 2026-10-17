@@ -34,14 +34,25 @@ public struct CoreWLANReader: WiFiReading {
     public func scanNeighbors() -> [NeighborNetwork]? {
         guard let iface = CWWiFiClient.shared().interface(),
               let networks = try? iface.scanForNetworks(withSSID: nil) else { return nil }
+        // Names are only available with Location access. They're compared
+        // here and dropped — Whirr never stores a network name.
+        let mine = iface.ssid()
         let heard = networks.compactMap { network -> NeighborNetwork? in
             guard let channel = network.wlanChannel else { return nil }
             return NeighborNetwork(channel: channel.channelNumber, band: Self.bandName(channel),
-                                   widthMHz: Self.widthMHz(channel), rssi: network.rssiValue)
+                                   widthMHz: Self.widthMHz(channel), rssi: network.rssiValue,
+                                   isYours: Self.isYours(network: network.ssid, mine: mine))
         }
         // The Mac's own network is always audible while connected, so an
         // empty result means the scan didn't really happen.
         return heard.isEmpty ? nil : heard.sorted { ($0.band, $0.channel, $0.rssi) < ($1.band, $1.channel, $1.rssi) }
+    }
+
+    /// nil when macOS withheld our own network's name; a hidden network
+    /// next door is "not yours".
+    static func isYours(network: String?, mine: String?) -> Bool? {
+        guard let mine else { return nil }
+        return network == mine
     }
 
     static func bandName(_ channel: CWChannel) -> String {

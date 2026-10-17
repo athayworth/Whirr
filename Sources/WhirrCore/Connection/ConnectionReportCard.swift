@@ -162,13 +162,27 @@ public enum ConnectionReportCard {
         }
         let mine = WiFiSpectrum.occupied(band: link.band, channel: link.channel, widthMHz: link.widthMHz)
         let sharing = neighbors.filter { WiFiSpectrum.overlaps($0.block, mine) }
-        guard !sharing.isEmpty else {
-            return row(.unknown, "The scan didn't hear any networks on your stretch of airwaves — not even yours — so it was incomplete. Run the test again.")
+        let namesKnown = neighbors.contains { $0.isYours != nil }
+        let ownHeard = namesKnown ? sharing.contains { $0.isYours == true } : !sharing.isEmpty
+        guard ownHeard else {
+            return row(.unknown, "The scan didn't hear your own network on your stretch of airwaves, so it was incomplete. Run the test again.")
         }
-        let loud = sharing.filter { $0.rssi >= loudRssi }.count
-        let grade: Grade = loud <= 2 ? .good : loud <= 5 ? .ok : .poor
-        let n = sharing.count
-        var explanation = "During the test, Whirr heard \(n) Wi-Fi network\(n == 1 ? "" : "s") using the same stretch of airwaves as yours (\(link.band) \(mine.label)), including yours. \(loud) \(loud == 1 ? "was" : "were") loud enough at your Mac to compete for airtime (counting yours). One router can broadcast more than one network, and a single scan can miss some."
+        // Loud networks other than yours. Without names, one entry is
+        // assumed to be yours (it was heard: see ownHeard).
+        let loudOthers: Int
+        var explanation: String
+        let place = "(\(link.band) \(mine.label))"
+        if namesKnown {
+            let others = sharing.filter { $0.isYours != true }
+            loudOthers = others.filter { $0.rssi >= loudRssi }.count
+            explanation = "During the test, Whirr heard \(others.count) other Wi-Fi network\(others.count == 1 ? "" : "s") using the same stretch of airwaves as yours \(place). \(loudOthers) \(loudOthers == 1 ? "was" : "were") loud enough at your Mac to compete for airtime. One router can broadcast more than one network, and a single scan can miss some."
+        } else {
+            let loud = sharing.filter { $0.rssi >= loudRssi }.count
+            loudOthers = max(0, loud - 1)
+            let n = sharing.count
+            explanation = "During the test, Whirr heard \(n) Wi-Fi network\(n == 1 ? "" : "s") using the same stretch of airwaves as yours \(place), including yours. \(loud) \(loud == 1 ? "was" : "were") loud enough at your Mac to compete for airtime (counting yours). One router can broadcast more than one network, and a single scan can miss some."
+        }
+        let grade: Grade = loudOthers <= 1 ? .good : loudOthers <= 4 ? .ok : .poor
         guard grade != .good else { return row(grade, explanation) }
 
         switch routerLinkEvidence(r) {
@@ -179,7 +193,7 @@ public enum ConnectionReportCard {
             explanation += " Whirr couldn't check the link between your Mac and the router around this test, so it can't say whether this crowding was causing problems."
             return row(grade, explanation)
         case .troubled:
-            return row(grade, explanation, quieterStretches(neighbors: neighbors, mine: mine, myLoud: loud))
+            return row(grade, explanation, quieterStretches(neighbors: neighbors, mine: mine, loudOthers: loudOthers))
         }
     }
 
@@ -195,13 +209,12 @@ public enum ConnectionReportCard {
         return health == .steady ? .steady : .unknown
     }
 
-    private static func quieterStretches(neighbors: [NeighborNetwork], mine: ChannelBlock, myLoud: Int) -> String {
+    private static func quieterStretches(neighbors: [NeighborNetwork], mine: ChannelBlock, loudOthers others: Int) -> String {
         func loudCount(_ block: ChannelBlock) -> Int {
-            neighbors.filter { $0.rssi >= loudRssi && WiFiSpectrum.overlaps($0.block, block) }.count
+            neighbors.filter { $0.isYours != true && $0.rssi >= loudRssi && WiFiSpectrum.overlaps($0.block, block) }.count
         }
         // "Quieter" means at most half as many loud networks as yours has
         // besides your own — a one-network difference is scan noise.
-        let others = max(0, myLoud - 1)
         let alternatives = WiFiSpectrum.candidateBlocks(band: mine.band, widthMHz: mine.widthMHz)
             .filter { !WiFiSpectrum.overlaps($0, mine) }
         guard !alternatives.isEmpty else {

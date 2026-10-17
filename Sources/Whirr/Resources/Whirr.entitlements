@@ -14,5 +14,9 @@
     -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- Hardened Runtime blocks Location Services without this. Used only
+         so macOS shares Wi-Fi network names (opt-in, Settings → General). -->
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
 </dict>
 </plist>

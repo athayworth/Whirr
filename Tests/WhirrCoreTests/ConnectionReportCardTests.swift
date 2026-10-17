@@ -13,8 +13,9 @@ final class ConnectionReportCardTests: XCTestCase {
         PassiveBefore(gateway: gateway ?? hop(), internet: internet ?? hop(), gatewayPingable: pingable, isWired: wired)
     }
 
-    private func net(_ channel: Int, _ width: Int = 80, rssi: Int = -60, band: String = "5 GHz") -> NeighborNetwork {
-        NeighborNetwork(channel: channel, band: band, widthMHz: width, rssi: rssi)
+    private func net(_ channel: Int, _ width: Int = 80, rssi: Int = -60, band: String = "5 GHz",
+                     yours: Bool? = nil) -> NeighborNetwork {
+        NeighborNetwork(channel: channel, band: band, widthMHz: width, rssi: rssi, isYours: yours)
     }
 
     private func result(down: Double? = 200, up: Double? = 30, idle: Double? = 20, loaded: Double? = 40,
@@ -255,5 +256,28 @@ final class ConnectionReportCardTests: XCTestCase {
         XCTAssertTrue(r.explanation.contains("at your Mac"), r.explanation)
         XCTAssertFalse(r.explanation.contains("make your router wait"), r.explanation)
         XCTAssertTrue(r.fix?.contains("can drop") ?? false, r.fix ?? "")
+    }
+
+    // MARK: Knowing which network is yours (opt-in Location access)
+
+    func testWithNamesKnownTheCountExcludesYourOwnNetwork() {
+        let n = [net(157, yours: true), net(149, yours: false), net(149, yours: false), net(36, yours: false)]
+        let r = row("crowding", result(neighbors: n))
+        XCTAssertTrue(r.explanation.contains("2 other Wi-Fi networks"), r.explanation)
+        XCTAssertFalse(r.explanation.contains("including yours"), r.explanation)
+        // Same scale as without names: 2 loud neighbours is OK, not good.
+        XCTAssertEqual(r.grade, .ok)
+    }
+
+    func testWithNamesKnownFiveLoudOthersIsPoor() {
+        let n = [net(157, yours: true)] + Array(repeating: net(149, yours: false), count: 5)
+        XCTAssertEqual(row("crowding", result(neighbors: n)).grade, .poor)
+    }
+
+    func testIfYourNetworkWasntHeardEvenWithNamesTheScanIsIncomplete() {
+        let n = [net(149, yours: false), net(149, yours: false)]
+        let r = row("crowding", result(neighbors: n))
+        XCTAssertEqual(r.grade, .unknown)
+        XCTAssertTrue(r.explanation.contains("incomplete"), r.explanation)
     }
 }

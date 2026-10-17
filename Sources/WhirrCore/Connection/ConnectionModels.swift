@@ -66,20 +66,24 @@ public struct WiFiLink: Codable, Sendable, Equatable {
     }
 }
 
-/// One Wi-Fi network heard during a scan. No name or hardware address:
-/// macOS only reveals those with Location permission, which Whirr
-/// doesn't ask for — so Whirr can't tell which entry is your own router.
+/// One Wi-Fi network heard during a scan. macOS only reveals network
+/// names with Location access, which Whirr asks for only if the user opts
+/// in; then each entry is marked as yours or not, and the name is dropped.
 public struct NeighborNetwork: Codable, Sendable, Equatable {
     public let channel: Int
     public let band: String
     public let widthMHz: Int
     public let rssi: Int
+    /// Whether this is the Mac's own network (same name). nil when macOS
+    /// withheld names (no Location access). The name itself is never kept.
+    public let isYours: Bool?
 
-    public init(channel: Int, band: String, widthMHz: Int, rssi: Int) {
+    public init(channel: Int, band: String, widthMHz: Int, rssi: Int, isYours: Bool? = nil) {
         self.channel = channel
         self.band = band
         self.widthMHz = widthMHz
         self.rssi = rssi
+        self.isYours = isYours
     }
 
     public var block: ChannelBlock { WiFiSpectrum.occupied(band: band, channel: channel, widthMHz: widthMHz) }

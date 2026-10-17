@@ -18,6 +18,7 @@ struct SettingsView: View {
     /// Holds permanent "This is normal for me" mutes, listed in the
     /// Quieted tab so they can be undone.
     let snoozeStore: SnoozeStore
+    @State private var location = LocationAccess()
 
     @AppStorage(Preferences.Key.samplingIntervalSeconds) private var samplingInterval =
         Preferences.defaultSamplingIntervalSeconds
@@ -90,6 +91,27 @@ struct SettingsView: View {
                     Text("How often Whirr re-reads system state. Lower = fresher diagnoses, slightly more battery; higher = lighter, but laggier menu.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Recognise your own Wi-Fi network")
+                        Spacer()
+                        switch location.state {
+                        case .allowed:
+                            Label("On", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        case .denied:
+                            Button("Open System Settings…") { location.openSystemSettings() }
+                        case .notAsked:
+                            Button("Allow…") { location.request() }
+                        }
+                    }
+                    Text("Optional. macOS only shares Wi-Fi network names with apps that have Location access. With it, the connection test can tell your network apart from your neighbours' when counting how crowded your channel is. Whirr never uses your location and never stores a network name. To turn this off, use System Settings → Privacy & Security → Location Services.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 

@@ -129,7 +129,7 @@ public enum Glossary {
             case .autoChannel:
                 return "Automatic selection can be helpful, but it can also move your network onto a busy stretch after a restart. Whirr logs every channel change it sees and compares how each stretch has done, so you can judge with evidence."
             case .crowding:
-                return "Networks your Mac hears at \(ConnectionReportCard.loudRssi) dBm or stronger are loud enough to compete for airtime; fainter ones matter much less. Signal is measured at your Mac, not at the router. Without Location permission macOS doesn't tell Whirr network names, so it can't tell which network is yours — and one router can broadcast several. A crowded stretch only matters if your Wi-Fi is actually having trouble."
+                return "Networks your Mac hears at \(ConnectionReportCard.loudRssi) dBm or stronger are loud enough to compete for airtime; fainter ones matter much less. Signal is measured at your Mac, not at the router. macOS only shares network names with apps that have Location access, so unless you turn on \"Recognise your own Wi-Fi network\" in Settings, Whirr can't tell which network is yours. Either way, one router can broadcast several networks. A crowded stretch only matters if your Wi-Fi is actually having trouble."
             case .linkRate:
                 return "It changes constantly with signal strength and interference. Real-world speed is usually about half of it, or less."
             case .routerHop:
