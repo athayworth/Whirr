@@ -43,7 +43,14 @@ public struct OutageDetector: Sendable {
     /// Failing, but not for long enough to call it an outage yet.
     public var isPending: Bool { pendingSince != nil }
     private var pendingSince: Date?
+    /// What each failing round in the pending window pointed to. The
+    /// recorded cause is the clear majority — one lost router ping during
+    /// a line outage mustn't relabel it "router".
+    private var votes: [OutageCause: Int] = [:]
     private var lastAt: Date?
+    /// A cause needs this share of the failing rounds; otherwise the
+    /// evidence is mixed and the outage is recorded as `.unknown`.
+    static let majorityShare = 2.0 / 3.0
 
     public init() {}
 
@@ -59,6 +66,7 @@ public struct OutageDetector: Sendable {
         var closed: OutageRecord?
         if let lastAt, now.timeIntervalSince(lastAt) > Self.sleepGap {
             pendingSince = nil
+            votes = [:]
             if var open = current {
                 open.end = lastAt
                 closed = open
@@ -69,6 +77,7 @@ public struct OutageDetector: Sendable {
 
         guard let cause = Self.cause(gatewayOK: gatewayOK, internetOK: internetOK, wifiAssociated: wifiAssociated) else {
             pendingSince = nil
+            votes = [:]
             if var open = current {
                 open.end = now
                 current = nil
@@ -78,15 +87,24 @@ public struct OutageDetector: Sendable {
         }
 
         if current != nil { return (nil, closed) }
+        votes[cause, default: 0] += 1
         guard let since = pendingSince else {
             pendingSince = now
             return (nil, closed)
         }
         guard now.timeIntervalSince(since) >= Self.minDuration else { return (nil, closed) }
-        let record = OutageRecord(start: since, cause: cause, networkId: networkId)
+        let record = OutageRecord(start: since, cause: majorityCause(), networkId: networkId)
         current = record
         pendingSince = nil
+        votes = [:]
         return (record, closed)
+    }
+
+    private func majorityCause() -> OutageCause {
+        let total = votes.values.reduce(0, +)
+        guard let top = votes.max(by: { $0.value < $1.value }), total > 0,
+              Double(top.value) / Double(total) >= Self.majorityShare else { return .unknown }
+        return top.key
     }
 
     static func cause(gatewayOK: Bool?, internetOK: Bool, wifiAssociated: Bool) -> OutageCause? {

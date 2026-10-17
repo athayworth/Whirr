@@ -94,4 +94,33 @@ final class OutageDetectorTests: XCTestCase {
         var d = OutageDetector()
         XCTAssertTrue(run(&d, from: 0, to: 30, gateway: true, internet: true, wifi: false).opened.isEmpty)
     }
+
+    // MARK: Cause from the whole failing window, not one ping
+
+    func testOneLostRouterPingDuringALineOutageIsStillTheLine() {
+        var d = OutageDetector()
+        run(&d, from: 0, to: 0, gateway: false, internet: false)   // first failing round: router ping lost
+        let r = run(&d, from: 2, to: 12, gateway: true, internet: false)
+        XCTAssertEqual(r.opened.first?.cause, .isp)
+    }
+
+    func testLastRoundAloneDoesNotDecideTheCause() {
+        var d = OutageDetector()
+        run(&d, from: 0, to: 8, gateway: true, internet: false)
+        let r = run(&d, from: 10, to: 10, gateway: false, internet: false)
+        XCTAssertEqual(r.opened.first?.cause, .isp)
+    }
+
+    func testEvenlySplitEvidenceIsUnknownRatherThanAGuess() {
+        var d = OutageDetector()
+        var t: TimeInterval = 0
+        var opened: OutageRecord?
+        while opened == nil && t <= 20 {
+            let gatewayOK = Int(t / 2) % 2 == 0
+            opened = d.observe(gatewayOK: gatewayOK, internetOK: false, wifiAssociated: true,
+                               at: t0.addingTimeInterval(t), networkId: "home").opened
+            t += 2
+        }
+        XCTAssertEqual(opened?.cause, .unknown)
+    }
 }

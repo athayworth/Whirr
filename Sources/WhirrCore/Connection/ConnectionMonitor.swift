@@ -152,9 +152,16 @@ public actor ConnectionMonitor {
 
         let gatewayIP = gateway?.ip
         let host = internetHost
+        let otherHost = host == Self.primaryInternetHost ? Self.fallbackInternetHost : Self.primaryInternetHost
+        // Two independent public hosts: the internet only counts as down
+        // when both fail, so a network that blocks one never logs an outage.
         async let gatewayRTT: Double? = gatewayIP == nil ? nil : pinger.ping(gatewayIP!, timeout: Self.pingTimeout)
         async let internetRTT: Double? = pinger.ping(host, timeout: Self.pingTimeout)
-        let (g, i) = await (gatewayRTT, internetRTT)
+        async let otherRTT: Double? = pinger.ping(otherHost, timeout: Self.pingTimeout)
+        let (g, hostRTT, other) = await (gatewayRTT, internetRTT, otherRTT)
+        // Stats follow one host so typical delay stays comparable; a lost
+        // reply from it while the other answered isn't a lost internet.
+        let i = hostRTT ?? other
 
         let id = gateway?.networkId ?? networkId ?? "unknown"
         if id != networkId { resetNetworkState(id) }
@@ -165,7 +172,7 @@ public actor ConnectionMonitor {
         if !gatewayEverAnswered && internetEverAnswered && roundsOnNetwork >= Self.unpingableAfterRounds {
             gatewayPingable = false
         }
-        trackInternetHostFallback(gatewayOK: g != nil, internetOK: i != nil)
+        trackInternetHostFallback(primaryOK: hostRTT != nil, otherOK: other != nil)
 
         let result = outages.observe(
             gatewayOK: gatewayPingable && gatewayEverAnswered ? (g != nil) : nil,
@@ -224,16 +231,15 @@ public actor ConnectionMonitor {
     }
 
     /// Some networks block 1.1.1.1 specifically. If it keeps failing
-    /// while the router is fine, try 8.8.8.8 instead of reporting a
-    /// permanent internet problem.
-    private func trackInternetHostFallback(gatewayOK: Bool, internetOK: Bool) {
+    /// while 8.8.8.8 answers, base the stats on 8.8.8.8 instead.
+    private func trackInternetHostFallback(primaryOK: Bool, otherOK: Bool) {
         guard internetHost == Self.primaryInternetHost else { return }
-        if !internetOK && gatewayOK {
+        if !primaryOK && otherOK {
             primaryHostFailures += 1
             if primaryHostFailures >= Self.fallbackAfterFailures {
                 internetHost = Self.fallbackInternetHost
             }
-        } else if internetOK {
+        } else if primaryOK {
             primaryHostFailures = 0
         }
     }

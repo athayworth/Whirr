@@ -89,15 +89,27 @@ final class ConnectionMonitorTests: XCTestCase {
         XCTAssertNil(later.currentOutage, "an unpingable router must not look like an outage")
     }
 
-    func testInternetHostFallsBackAfterThirtyFailuresWhileRouterAnswers() async {
+    func testNetworkBlockingOnePublicHostNeverLogsAnOutage() async {
         let p = FakePinger(); p.set("192.168.1.1", 3); p.set("8.8.8.8", 25)  // 1.1.1.1 blocked
         let m = monitor(p)
-        await rounds(m, 31)
-        p.set("192.168.1.1", 3)
-        await rounds(m, 3, from: 62)
-        XCTAssertEqual(p.hostsPinged.last { $0 != "192.168.1.1" }, "8.8.8.8")
-        let s = await m.snapshot(at: t0.addingTimeInterval(66))
+        for i in 0..<40 {
+            await m.pingRound(at: t0.addingTimeInterval(Double(i) * 2))
+            let s = await m.snapshot(at: t0.addingTimeInterval(Double(i) * 2))
+            XCTAssertNil(s.currentOutage, "round \(i)")
+        }
+        XCTAssertTrue(ConnectionHistoryStore(directory: dir).outages().isEmpty)
+        let s = await m.snapshot(at: t0.addingTimeInterval(78))
         XCTAssertEqual(s.internet1m.medianMs, 25)
+        XCTAssertEqual(s.internet1m.lossPercent, 0)
+    }
+
+    func testInternetDownOnlyWhenBothPublicHostsFail() async {
+        let p = FakePinger(); p.set("192.168.1.1", 3)  // both public hosts silent
+        let m = monitor(p)
+        await rounds(m, 8)
+        let s = await m.snapshot(at: t0.addingTimeInterval(14))
+        XCTAssertEqual(s.currentOutage?.cause, .isp)
+        XCTAssertTrue(p.hostsPinged.contains("8.8.8.8"))
     }
 
     func testPausedIgnoresRounds() async {
@@ -181,7 +193,7 @@ final class ConnectionMonitorTests: XCTestCase {
         await m.pingRound(at: t0.addingTimeInterval(10))
         let s = await m.snapshot(at: t0.addingTimeInterval(10))
         XCTAssertEqual(s.networkId, "cc:dd")
-        XCTAssertEqual(p.hostsPinged.suffix(2).sorted(), ["1.1.1.1", "172.20.10.1"])
+        XCTAssertEqual(p.hostsPinged.suffix(3).sorted(), ["1.1.1.1", "172.20.10.1", "8.8.8.8"])
         XCTAssertEqual(s.gateway1m.count, 1, "home samples must not mix into the hotspot's")
     }
 
