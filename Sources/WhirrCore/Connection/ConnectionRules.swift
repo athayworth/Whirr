@@ -61,6 +61,7 @@ public struct ConnectionRuleConfig: Codable, Sendable, Equatable {
 
 /// The router hop stalls or drops pings: the problem is inside the home.
 struct SpikyWiFiRule: Rule {
+    static let stallImpact = "Stalls make games, calls and streams stutter, even when your speed is fine."
     let config: ConnectionRuleConfig
     var isEnabled: Bool { config.enabled }
 
@@ -80,6 +81,10 @@ struct SpikyWiFiRule: Rule {
             severity: critical ? .critical : .warning,
             area: .connection,
             action: SuggestedAction(label: "Check my connection", kind: .runConnectionTest)
+        ).explained(
+            evidence: ["\(g.spikes) stalls between your Mac and the router in the last 10 minutes",
+                       String(format: "%.0f%% of router checks lost", g.lossPercent)],
+            impact: Self.stallImpact
         )
     }
 }
@@ -107,6 +112,10 @@ struct PastRouterRule: Rule {
             severity: critical ? .critical : .warning,
             area: .connection,
             action: SuggestedAction(label: "What to check", kind: .showHowTo(.talkToISP))
+        ).explained(
+            evidence: ["Beyond the router: \(i.spikes) stalls in the last 10 minutes, " + String(format: "%.0f%% lost", i.lossPercent),
+                       "Between your Mac and the router: \(g.spikes) stalls (steady)"],
+            impact: SpikyWiFiRule.stallImpact
         )
     }
 }
@@ -127,6 +136,10 @@ struct WeakSignalRule: Rule {
             severity: .warning,
             area: .connection,
             action: SuggestedAction(label: "Ways to improve the signal", kind: .showHowTo(.improveSignal))
+        ).explained(
+            evidence: ["Signal \(link.rssi) dBm (Whirr calls it weak below \(config.weakRssi) dBm)",
+                       "\(link.snr) dB above background noise (weak below \(config.weakSnr) dB)"],
+            impact: "A weak signal can slow your connection and make it drop."
         )
     }
 }
@@ -139,6 +152,14 @@ struct OutageRule: Rule {
         guard let outage = ctx.connection?.currentOutage else { return nil }
         let detail: String
         let howTo: SuggestedAction.HowTo
+        let noInternet = "No reply from either internet server Whirr checks"
+        let evidence: [String]
+        switch outage.cause {
+        case .router: evidence = ["No reply from your router", noInternet]
+        case .isp: evidence = ["Your router is answering", noInternet]
+        case .wifiDisconnected: evidence = ["This Mac isn't connected to Wi-Fi"]
+        case .unknown: evidence = [noInternet, "Your router doesn't answer Whirr's checks, so Whirr can't tell whether the router or the line is at fault"]
+        }
         switch outage.cause {
         case .router:
             detail = "Your router stopped responding. Restarting it usually brings it back. Whirr is logging this so you can tell how often it happens."
@@ -159,6 +180,6 @@ struct OutageRule: Rule {
             severity: .critical,
             area: .connection,
             action: SuggestedAction(label: "What to do", kind: .showHowTo(howTo))
-        )
+        ).explained(evidence: evidence, impact: nil)
     }
 }

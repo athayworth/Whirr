@@ -138,4 +138,19 @@ final class ConnectionRulesTests: XCTestCase {
         XCTAssertEqual(OutageCause.wifiDisconnected.summary, "Wi-Fi disconnected.")
         XCTAssertEqual(OutageCause.unknown.summary, "Connection is down.")
     }
+
+    func testConnectionFindingsExplainThemselvesFromTheirInputs() {
+        let spiky = find(ConnectionTitles.spikyWiFi, snap(gateway: hop(spikes: 14, loss: 3)))
+        EvidenceAccuracy.assertAllNumbers(spiky, from: [14, 3, 10])
+        XCTAssertNotNil(spiky?.impact)
+        let past = find(ConnectionTitles.pastRouter, snap(gateway: hop(spikes: 1), internet: hop(spikes: 9)))
+        EvidenceAccuracy.assertAllNumbers(past, from: [1, 9, 0, 10])
+        let weak = WiFiLink(rssi: -75, noise: -100, channel: 36, band: "5 GHz", widthMHz: 80, txRateMbps: 100, phyMode: "802.11ax")
+        EvidenceAccuracy.assertAllNumbers(find(ConnectionTitles.weakSignal, snap(link: .some(weak))),
+                                          from: [-75, 25, -72, 20, 5])
+        let down = find(ConnectionTitles.outage, snap(outage: OutageRecord(start: Date(), cause: .unknown, networkId: "h")))
+        XCTAssertTrue(down?.evidence.contains { $0.contains("can't tell") } ?? false)
+        let isp = find(ConnectionTitles.outage, snap(outage: OutageRecord(start: Date(), cause: .isp, networkId: "h")))
+        EvidenceAccuracy.assertAllNumbers(isp, from: [1, 8])
+    }
 }
