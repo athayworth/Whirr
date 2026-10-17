@@ -653,11 +653,40 @@ final class RulesEngineTests: XCTestCase {
         XCTAssertNil(result.first { $0.title == "Spotlight is reindexing" })
     }
 
+    // MARK: - Docker as a major share
+
+    func testDockerHoldingAQuarterOfMemoryIsAMajorLoad() {
+        // 16 GB Mac, Docker VM at 9 GB: Docker itself is the strain.
+        let result = engine.evaluate(
+            snapshot: snapshot(used: 14 * .gb, available: 2 * .gb),
+            processes: [
+                process(pid: 1, name: "com.docker.backend", mem: 1 * .gb),
+                process(pid: 2, name: "com.apple.Virtualization.Virtua", mem: 8 * .gb)
+            ]
+        )
+        let major = result.first { $0.title == DiagnosisTitles.dockerMajorLoad }
+        XCTAssertNotNil(major)
+        XCTAssertTrue(major?.detail.contains("56%") ?? false, major?.detail ?? "")
+        XCTAssertNil(result.first { $0.title == DiagnosisTitles.dockerStrain })
+    }
+
+    func testDockerUsingMostOfTheCPUInUseIsAMajorLoad() {
+        let result = engine.evaluate(
+            snapshot: snapshot(used: 32 * .gb, available: 32 * .gb),
+            processes: [
+                process(pid: 1, name: "com.docker.backend", cpu: 20, mem: 1 * .gb),
+                process(pid: 2, name: "com.apple.Virtualization.Virtua", cpu: 280, mem: 3 * .gb),
+                process(pid: 3, name: "Safari", cpu: 40, mem: 1 * .gb)
+            ]
+        )
+        XCTAssertNotNil(result.first { $0.title == DiagnosisTitles.dockerMajorLoad })
+    }
+
     // MARK: - DockerStrainNarrative
 
     func testDockerNarrativeFiresWhenDockerHeavy() {
         let result = engine.evaluate(
-            snapshot: snapshot(),
+            snapshot: snapshot(used: 32 * .gb, available: 32 * .gb),
             processes: [
                 process(pid: 1, name: "com.docker.backend", mem: 1 * .gb),
                 process(pid: 2, name: "com.apple.Virtualization.Virtua", mem: 7 * .gb)
@@ -671,7 +700,7 @@ final class RulesEngineTests: XCTestCase {
 
     func testDockerNarrativeCriticalAt8GB() {
         let result = engine.evaluate(
-            snapshot: snapshot(),
+            snapshot: snapshot(used: 32 * .gb, available: 32 * .gb),
             processes: [
                 process(pid: 1, name: "com.docker.backend", mem: 2 * .gb),
                 process(pid: 2, name: "com.apple.Virtualization.Virtua", mem: 8 * .gb)

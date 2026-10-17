@@ -42,11 +42,27 @@ final class FindingsTests: XCTestCase {
         XCTAssertNil(out.action)
     }
 
+    func testDockerAsAMinorShareStaysANoteEvenUnderStrain() {
+        // The strain could be an Xcode build; Docker using a small share
+        // of the Mac isn't evidence that Docker caused it.
+        let out = classify([d(DiagnosisTitles.dockerStrain, .critical, kind: .narrative),
+                            d(DiagnosisTitles.overloaded)])[DiagnosisTitles.dockerStrain]!
+        XCTAssertEqual(out.tier, .note)
+        XCTAssertEqual(out.area, .developer)
+        XCTAssertNil(out.action)
+    }
+
+    func testDockerAsAMajorLoadAloneIsADeveloperNote() {
+        let out = classify([d(DiagnosisTitles.dockerMajorLoad, .warning, kind: .narrative)])[DiagnosisTitles.dockerMajorLoad]!
+        XCTAssertEqual(out.tier, .note)
+        XCTAssertEqual(out.area, .developer)
+    }
+
     func testDockerEscalatesToMacProblemWhenSystemIsStrained() {
         for strain in [DiagnosisTitles.overloaded, DiagnosisTitles.memorySaturated,
                        DiagnosisTitles.swapActivelyPaging, DiagnosisTitles.thermalWarning,
                        DiagnosisTitles.thermalCritical] {
-            let out = classify([d(DiagnosisTitles.dockerStrain, .critical, kind: .narrative), d(strain)])[DiagnosisTitles.dockerStrain]!
+            let out = classify([d(DiagnosisTitles.dockerMajorLoad, .critical, kind: .narrative), d(strain)])[DiagnosisTitles.dockerMajorLoad]!
             XCTAssertEqual(out.area, .mac, strain)
             XCTAssertEqual(out.tier, .problem, strain)
             XCTAssertEqual(out.action?.kind, .stopDocker, strain)

@@ -203,6 +203,9 @@ enum DiagnosisTitles {
     static let overloaded = "System is overloaded"
     static let lowDisk = "Disk is nearly full"
     static let dockerStrain = "Docker is using significant resources"
+    /// Docker holds a large share of the Mac itself — the only Docker
+    /// finding that can become a Mac problem (see FindingClassifier).
+    static let dockerMajorLoad = "Docker is a major load on your Mac"
     static let idleHogs = "Big processes that look unused"
 }
 
@@ -706,6 +709,14 @@ struct DockerStrainNarrative: NarrativeRule {
 
         let severity: Severity = memoryGB >= config.memoryCritGB ? .critical : .warning
 
+        // Docker's share of this Mac, from the same sample. A big share is
+        // evidence Docker is behind any strain; a small one isn't.
+        let totalRAM = ctx.snapshot.memoryUsedBytes &+ ctx.snapshot.memoryAvailableBytes
+        let memoryShare = totalRAM > 0 ? Double(totalMemory) / Double(totalRAM) : 0
+        let allCPU = ctx.processes.reduce(0.0) { $0 + $1.cpuPercent }
+        let cpuShare = allCPU > 0 ? totalCPU / allCPU : 0
+        let isMajor = memoryShare >= 0.25 || (cpuShare >= 0.4 && totalCPU >= config.cpuWarnPercent)
+
         // If we have per-container stats from the Docker socket, name the
         // heaviest container directly instead of telling the user to run
         // `docker stats` themselves.
@@ -727,9 +738,12 @@ struct DockerStrainNarrative: NarrativeRule {
             )
         }
 
+        let shareNote = isMajor
+            ? String(format: " That's %.0f%% of this Mac's memory and %.0f%% of all CPU in use.", memoryShare * 100, cpuShare * 100)
+            : ""
         return Diagnosis(
-            title: DiagnosisTitles.dockerStrain,
-            detail: detail,
+            title: isMajor ? DiagnosisTitles.dockerMajorLoad : DiagnosisTitles.dockerStrain,
+            detail: detail + shareNote,
             severity: severity,
             culprits: dockerProcs.map(\.name),
             kind: .narrative

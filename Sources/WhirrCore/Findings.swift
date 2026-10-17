@@ -48,8 +48,8 @@ public struct SuggestedAction: Hashable, Codable, Sendable {
 /// lives in one reviewable place.
 public enum FindingClassifier {
     /// Diagnoses that mean the whole system is genuinely struggling.
-    /// Their presence is what turns "Docker is running" from a developer
-    /// note into a Mac problem worth acting on.
+    /// Their presence, with Docker holding a large share of the Mac, is
+    /// what turns Docker from a developer note into a Mac problem.
     static let systemStrainTitles: Set<String> = [
         DiagnosisTitles.overloaded,
         DiagnosisTitles.memorySaturated,
@@ -74,6 +74,10 @@ public enum FindingClassifier {
                                action: SuggestedAction(label: "How to free up space", kind: .showHowTo(.freeDiskSpace)))
                 : d.classified(tier: .note, area: .mac, action: nil)
         case DiagnosisTitles.dockerStrain:
+            return d.classified(tier: .note, area: .developer, action: nil)
+        case DiagnosisTitles.dockerMajorLoad:
+            // Only when Docker is a large share of the Mac *and* the Mac is
+            // struggling — never on strain alone (it could be anything).
             return systemStrained
                 ? d.classified(tier: .problem, area: .mac,
                                action: SuggestedAction(label: "Stop Docker containers", kind: .stopDocker))

@@ -58,7 +58,7 @@ public enum NotificationSubtitles {
             return "No action needed — this finishes on its own."
 
         // Docker
-        case "Docker is using significant resources":
+        case "Docker is using significant resources", "Docker is a major load on your Mac":
             return "Stop unused containers to reclaim memory and CPU."
 
         // Idle
